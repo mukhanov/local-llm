@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -97,6 +98,10 @@ def start_mlx(cfg, model: str) -> None:
     ui.info(f"Starting mlx_lm.server on :{cfg.mlx_port}")
     _pkill(_MLX_PATTERN)
     time.sleep(1)
+    # из коробки mlx живёт в ~/.ollmlx/venv (лаунчер); при установке через
+    # pipx/uv-tool запускаемся из того окружения, где стоит пакет
+    python = (str(cfg.venv_python) if cfg.venv_python.exists()
+              else sys.executable)
     ctx = hf.model_ctx(cfg.hf_hub, model)
     flags = []
     if cfg.kv_bits > 0:
@@ -107,7 +112,7 @@ def start_mlx(cfg, model: str) -> None:
     log = open(MLX_LOG, "wb")
     try:
         proc = subprocess.Popen(
-            [str(cfg.venv_python), "-m", "mlx_lm.server",
+            [python, "-m", "mlx_lm.server",
              "--model", model, "--host", "127.0.0.1",
              "--port", str(cfg.mlx_port),
              "--max-tokens", str(min(ctx, 32768)), *flags],

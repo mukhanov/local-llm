@@ -1,23 +1,31 @@
-#!/bin/zsh
-# local-llm — launcher: поднимает ~/.ollmlx/venv и исполняет python-пакет
-# local_llm (см. ../local_llm/). Вся логика — там.
+#!/bin/sh
+# local-llm — launcher: поднимает venv (зависимости — из pyproject.toml)
+# и запускает пакет. Вся логика — в local_llm/.
 set -e
-APP_DIR="${0:A:h}"
-VENV="$HOME/.ollmlx/venv"
+APP_DIR=$(cd "$(dirname "$0")" && pwd)
+OLLMLX="${OLLMLX_HOME:-$HOME/.ollmlx}"
+VENV="$OLLMLX/venv"
+STAMP="$OLLMLX/venv.deps"   # хэш pyproject.toml последней установки
 
-if [[ ! -x "$VENV/bin/python" ]]; then
-  command -v uv >/dev/null || { echo "uv is required: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
-  uv venv "$VENV"
-  uv pip install --python "$VENV/bin/python" mlx-lm huggingface-hub psutil
-fi
-# psutil нужен монитору; доустанавливаем в существующий venv
-"$VENV/bin/python" -c 'import psutil' 2>/dev/null || \
-  uv pip install --python "$VENV/bin/python" psutil
+command -v uv >/dev/null 2>&1 || {
+  echo "uv is required: curl -LsSf https://astral.sh/uv/install.sh | sh"
+  exit 1
+}
 
-# huggingface_hub>=1.x зовут CLI `hf`; старые вызывающие (ollmlx) ждут huggingface-cli
-if [[ ! -x "$VENV/bin/huggingface-cli" || -L "$VENV/bin/huggingface-cli" ]]; then
-  printf '#!/bin/sh\nexec "$(dirname "$0")/hf" "$@"\n' > "$VENV/bin/huggingface-cli"
-  chmod +x "$VENV/bin/huggingface-cli"
+mkdir -p "$OLLMLX"
+if [ ! -x "$VENV/bin/python" ]; then
+  uv venv "$VENV" --python 3.12
+  rm -f "$STAMP"
 fi
 
-PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" exec "$VENV/bin/python" -m local_llm "$@"
+# единственный источник зависимостей — pyproject.toml; ставим пакет целиком
+# (editable: git pull обновляет код без переустановки). Повторяем только когда
+# pyproject изменился — обычный запуск ничего не качает.
+hash=$( (sha256sum "$APP_DIR/pyproject.toml" 2>/dev/null \
+         || shasum -a 256 "$APP_DIR/pyproject.toml") | cut -d' ' -f1)
+if [ "$(cat "$STAMP" 2>/dev/null)" != "$hash" ]; then
+  uv pip install --python "$VENV/bin/python" -e "$APP_DIR"
+  printf '%s\n' "$hash" > "$STAMP"
+fi
+
+exec "$VENV/bin/local-llm" "$@"

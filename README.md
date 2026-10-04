@@ -49,23 +49,54 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
 ## Requirements
 
 - macOS on Apple Silicon (MLX runs only on M-series chips)
-- Python 3.12+ and [`uv`](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [`uv`](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
-Everything else is installed on first run: the app creates its own venv at
-`~/.ollmlx/venv` (mlx-lm, huggingface-hub, psutil) and installs `litellm` as a
-uv tool.
+That's the only manual prerequisite — Python itself and all dependencies are
+installed automatically (see below).
 
 > The TUI and CLI messages are in Russian. The tool itself needs no
 > configuration decisions from you — run it and pick a model.
 
 ## Install
 
+From a git checkout — the launcher bootstraps everything on first run:
+
 ```console
 $ git clone https://github.com/<you>/local-llm.git
 $ cd local-llm
-$ mkdir -p ~/bin && ln -s "$PWD/local-llm" ~/bin/local-llm   # if ~/bin is in PATH
-$ local-llm
+$ ./local-llm                 # creates the venv, installs deps, opens the picker
 ```
+
+To have `local-llm` on your PATH, symlink the launcher:
+
+```console
+$ mkdir -p ~/bin && ln -s "$PWD/local-llm" ~/bin/local-llm   # if ~/bin is in PATH
+```
+
+Prefer standard tooling? The package is installable too:
+
+```console
+$ uv tool install .           # or: pipx install .
+$ local-llm
+# or run straight from the checkout without installing:
+$ uv run local-llm
+```
+
+### Dependencies
+
+Dependencies are declared once, in [`pyproject.toml`](pyproject.toml):
+`mlx-lm` (pulls in MLX for your chip), `huggingface-hub`, `psutil`.
+Nothing is installed globally:
+
+| What                | Where                          | Installed when              |
+|---------------------|--------------------------------|-----------------------------|
+| Python 3.12         | managed by uv, if none found   | first run (`uv venv`)       |
+| local-llm + deps    | `~/.ollmlx/venv` (editable)    | first run and whenever `pyproject.toml` changes |
+| `litellm`           | uv tool (`~/.local/...`)       | first stack start, if missing |
+
+The launcher reinstalls dependencies only when `pyproject.toml` changes, so
+regular launches don't touch the network. `git pull` picks up code changes
+immediately thanks to the editable install.
 
 ## Usage
 
@@ -174,7 +205,8 @@ shared with another downloaded model.
 ## Project layout
 
 ```
-local-llm          # zsh launcher: venv bootstrap + exec python -m local_llm
+local-llm          # sh launcher: venv bootstrap from pyproject + exec
+pyproject.toml     # dependencies, entry point, metadata
 local_llm/
   cli.py           # commands and stack orchestration
   picker.py        # curses model picker (TUI + plain fallback)

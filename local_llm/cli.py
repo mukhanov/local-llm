@@ -34,7 +34,8 @@ Env: MLX_KV_BITS=8 (квант KV-кэша, 0=off), MLX_PROMPT_CACHE_BYTES (0=of
      MLX_PORT, LITELLM_PORT, LOAD_TIMEOUT, OLLMLX_HOME, HF_HUB_CACHE"""
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] in ("-h", "--help", "help"):
         print(USAGE)
         return 0
