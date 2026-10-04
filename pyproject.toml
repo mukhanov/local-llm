@@ -6,11 +6,11 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    # MLX-сервер (OpenAI API) — сам тянет mlx/mlx-metal под текущий чип
+    # MLX server (OpenAI API) — pulls in mlx/mlx-metal for the current chip
     "mlx-lm>=0.25",
-    # snapshot_download, HF API; рассчитано на раскладку кэша hub 1.x
+    # snapshot_download, HF API; targets the hub 1.x cache layout
     "huggingface-hub>=1.0",
-    # монитор: CPU по ядрам, RSS процессов
+    # monitor: per-core CPU, process RSS
     "psutil>=5.9",
 ]
 

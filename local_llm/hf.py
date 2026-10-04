@@ -1,5 +1,5 @@
-"""HuggingFace: DoH-обход сломанного DNS, топ моделей через API,
-локальный кэш (~/.cache/huggingface/hub), загрузка и удаление."""
+"""HuggingFace: DoH workaround for broken DNS, top models via the API,
+local cache (~/.cache/huggingface/hub), download and deletion."""
 import json
 import os
 import shutil
@@ -10,8 +10,8 @@ from pathlib import Path
 
 from . import ui
 
-# Локальный TUN-прокси выдаёт fake-ip для *.huggingface.co / *.hf.co, на которых
-# умирает TLS. Резолвим их через DoH (1.1.1.1) и пинним результат.
+# A local TUN proxy hands out fake IPs for *.huggingface.co / *.hf.co, on
+# which TLS dies. Resolve them via DoH (1.1.1.1) and pin the result.
 DOH = "https://1.1.1.1/dns-query"
 _pinned: dict = {}
 _orig_gai = socket.getaddrinfo
@@ -40,7 +40,7 @@ def _gai(host, *a, **kw):
 
 
 def install_doh() -> None:
-    """Патчит socket.getaddrinfo (идемпотентно). Звать до сетевых запросов."""
+    """Monkey-patch socket.getaddrinfo (idempotent). Call before network requests."""
     global _installed
     if not _installed:
         socket.getaddrinfo = _gai
@@ -48,7 +48,7 @@ def install_doh() -> None:
 
 
 def fetch_page(skip: int = 0, limit: int = 50, token: str | None = None):
-    """Топ mlx-community с HF, только text-generation (LLM)."""
+    """Top of mlx-community from HF, text-generation only (LLMs)."""
     install_doh()
     url = (
         f"https://huggingface.co/api/models?author=mlx-community"
@@ -68,8 +68,8 @@ def fetch_page(skip: int = 0, limit: int = 50, token: str | None = None):
 
 
 def _repo_file_meta(repo: str, token: str | None):
-    """(суммарный размер репо в байтах, {sha256-blob: имя файла}, число файлов)
-    из HF API. При ошибке — (0, {}, 0): прогресс покажется без процентов."""
+    """(total repo size in bytes, {sha256-blob: file name}, file count) from
+    the HF API. On failure — (0, {}, 0): progress shows without percentages."""
     install_doh()
     req = urllib.request.Request(
         f"https://huggingface.co/api/models/{repo}?blobs=true",
@@ -87,7 +87,7 @@ def _repo_file_meta(repo: str, token: str | None):
     for s in siblings:
         if s.get("size"):
             total += s["size"]
-        # blob в кэше зовётся по lfs.sha256 (для LFS) либо по blobId (git-файлы)
+        # cache blobs are named by lfs.sha256 (for LFS) or blobId (git files)
         oid = (s.get("lfs") or {}).get("sha256") or s.get("blobId")
         if oid:
             by_blob[oid] = s.get("rfilename", "?")
@@ -95,8 +95,8 @@ def _repo_file_meta(repo: str, token: str | None):
 
 
 def _scan_download(model_dir: Path):
-    """(байт скачано, blob текущего файла, готовых файлов) по каталогу blobs:
-    готовые файлы лежат в blobs/<sha>, качающиеся — blobs/<sha>.incomplete."""
+    """(bytes downloaded, current file's blob, files done) from the blobs dir:
+    finished files live in blobs/<sha>, in-flight ones in blobs/<sha>.incomplete."""
     done = cur_size = files_done = 0
     cur_blob = None
     blobs = model_dir / "blobs"
@@ -110,8 +110,9 @@ def _scan_download(model_dir: Path):
         done += size
         if f.name.endswith(".incomplete"):
             if size > cur_size:
-                # имя вида <sha256>.<случайный инфикс>.incomplete — для
-                # сверки с lfs oid из API нужен только sha до первой точки
+                # name looks like <sha256>.<random infix>.incomplete — matching
+                # against the lfs sha256 from the API needs just the part
+                # before the first dot
                 cur_size = size
                 cur_blob = f.name[:-len(".incomplete")].split(".")[0]
         else:
@@ -124,16 +125,16 @@ def _fmt_eta(sec: float) -> str:
     h, rem = divmod(sec, 3600)
     m, s = divmod(rem, 60)
     if h:
-        return f"{h}ч{m:02d}м"
-    return f"{m}м{s:02d}с" if m else f"{s}с"
+        return f"{h}h{m:02d}m"
+    return f"{m}m{s:02d}s" if m else f"{s}s"
 
 
 def _prune_partials(model_dir: Path) -> int:
-    """Убирает огрызки прошлых попыток (*.incomplete) и возвращает их размер.
+    """Remove leftovers from previous attempts (*.incomplete), return their size.
 
-    hub 1.x качает во временный файл с уникальным infix и не переиспользует
-    его между запусками — такие огрызки бесполезны (могут остаться только
-    после жёсткого убийства процесса)."""
+    hub 1.x downloads into a temp file with a unique infix and never reuses it
+    across runs — such leftovers are useless (they can only survive a hard
+    kill of the process)."""
     freed = 0
     blobs = model_dir / "blobs"
     if not blobs.is_dir():
@@ -149,12 +150,14 @@ def _prune_partials(model_dir: Path) -> int:
 
 def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
              poll: float = 1.0) -> None:
-    """snapshot_download с DoH-пином, без xet/hf_transfer и со своим прогрессом.
+    """snapshot_download with DoH pinning, without xet/hf_transfer, with our
+    own progress display.
 
-    Родные tqdm-бары huggingface_hub («Downloading bytes», «Reconstructing»,
-    «Fetching N files») выключены: вместо них одна строка с баром, скоростью,
-    ETA и текущим файлом (байты считаем по каталогу blobs, ожидаемый размер —
-    из HF API). Токен уходит в env HF_TOKEN — huggingface_hub берёт его сам."""
+    huggingface_hub's native tqdm bars ("Downloading bytes", "Reconstructing",
+    "Fetching N files") are disabled: instead there's a single line with a
+    bar, speed, ETA and the current file (bytes are measured in the blobs
+    dir, expected size comes from the HF API). The token goes into the
+    HF_TOKEN env — huggingface_hub picks it up itself."""
     install_doh()
     if token:
         os.environ["HF_TOKEN"] = token
@@ -175,13 +178,13 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
 
     print(f"==> fetching {repo}", flush=True)
     total, name_by_blob, total_files = _repo_file_meta(repo, token)
-    if hf_hub is None:  # тот же резолв, что у snapshot_download
+    if hf_hub is None:  # same resolution as snapshot_download
         hf_hub = Path(os.environ.get(
             "HF_HUB_CACHE", "~/.cache/huggingface/hub")).expanduser()
     model_dir = hf_hub / ("models--" + repo.replace("/", "--"))
     freed = _prune_partials(model_dir)
     if freed > 1024 * 1024:
-        ui.info(f"очищено огрызков прошлых попыток: {ui.human_bytes(freed)}")
+        ui.info(f"pruned stale partials from previous attempts: {ui.human_bytes(freed)}")
     is_tty = sys.stdout.isatty()
     term_w = shutil.get_terminal_size((100, 20)).columns
 
@@ -190,7 +193,7 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
     def worker():
         try:
             snapshot_download(repo_id=repo)
-        except BaseException as exc:  # noqa: BLE001 — прокидываем в главный поток
+        except BaseException as exc:  # noqa: BLE001 — re-raised in the main thread
             state["error"] = exc
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -215,7 +218,7 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
                 parts.append(ui.human_bytes(done))
             if rate > 1024:
                 parts.append(f"{rate / 1024 / 1024:5.1f}MB/s")
-                # при околонулевой скорости ETA бессмыслен и растёт до часов
+                # at near-zero speed an ETA is meaningless and grows to hours
                 if total and rate > 50 * 1024:
                     parts.append(f"ETA {_fmt_eta((total - done) / rate)}")
             if cur_blob:
@@ -224,16 +227,16 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
                     name = name[:41] + "…"
                 count = (f"{min(files_done + 1, total_files)}/{total_files} · "
                          if total_files else "")
-                parts.append(f"файл {count}{name}")
+                parts.append(f"file {count}{name}")
             line = ("   ⬇ " + " │ ".join(parts))[: term_w - 1]
             if is_tty:
                 print("\r" + line.ljust(term_w - 1), end="", flush=True)
-            elif ticks % 15 == 0:  # в pipe — разовые строки раз в ~15с
+            elif ticks % 15 == 0:  # in a pipe — one line every ~15s
                 print(line, flush=True)
             ticks += 1
         thread.join()
     except KeyboardInterrupt:
-        print("\n   прервано — докачки нет, при повторе файлы начнутся заново")
+        print("\n   interrupted — there is no resume, files restart on the next run")
         raise
 
     if state["error"] is not None:
@@ -242,7 +245,7 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
         print("\r" + " " * (term_w - 1) + "\r", end="", flush=True)
 
 
-# --- локальный кэш -----------------------------------------------------------
+# --- local cache ----------------------------------------------------------------
 
 
 def model_dir(hf_hub: Path, repo: str) -> Path:
@@ -250,24 +253,25 @@ def model_dir(hf_hub: Path, repo: str) -> Path:
 
 
 def is_cached(hf_hub: Path, repo: str) -> bool:
-    """Полностью ли модель на диске: safetensors есть и все ссылки живы
-    (у недокачанной части шардов цель отсутствует — надо качать заново)."""
+    """Is the model fully on disk: safetensors present and every link alive
+    (in a partial download some shard targets are missing — needs a re-download)."""
     sts = list(model_dir(hf_hub, repo).glob("snapshots/*/*.safetensors"))
     return bool(sts) and all(p.exists() for p in sts)
 
 
 def _dir_size(root: Path, hub_root: Path | None = None) -> int:
-    """Реальный вес модели на диске.
+    """Real disk usage of a model.
 
-    Симлинки считаем один раз по резолвнутой цели, а не по ссылке (снапшоты
-    ссылаются в blobs). Без hub_root цели не резолвим: старый режим, когда все
-    файлы лежали внутри каталога модели. С hub_root учитываем и общее
-    хранилище hub/blobs/<xx>/<sha> (shared-CAS раскладка hub 1.x: у модели
-    только симлинки, настоящие веса — в CAS)."""
+    Symlinks are counted once by their resolved target, not by the link
+    (snapshots point into blobs). Without hub_root targets are not resolved:
+    the old mode where all files lived inside the model's own dir. With
+    hub_root we also account for the shared store hub/blobs/<xx>/<sha>
+    (the shared-CAS layout of hub 1.x: the model dir holds only symlinks,
+    the actual weights live in the CAS)."""
     seen: set[str] = set()
     size = 0
-    root_s = os.path.realpath(root)  # пути сравниваем после резолва всех
-    hub_s = os.path.realpath(hub_root) if hub_root else None  # симлинков (/var -> /private/var)
+    root_s = os.path.realpath(root)  # compare paths after resolving all
+    hub_s = os.path.realpath(hub_root) if hub_root else None  # symlinks (/var -> /private/var)
     for dirpath, _dirs, files in os.walk(root):
         for f in files:
             fp = os.path.join(dirpath, f)
@@ -278,11 +282,11 @@ def _dir_size(root: Path, hub_root: Path | None = None) -> int:
             if not stat.S_ISLNK(st.st_mode):
                 size += st.st_size
                 continue
-            # симлинк: цель внутри каталога посчитается сама при обходе
-            # (снапшот -> blobs), резолвим только цели вне него (CAS hub)
+            # symlink: a target inside the dir is counted by the walk itself
+            # (snapshot -> blobs), resolve only targets outside it (hub CAS)
             try:
                 tgt = os.path.realpath(fp)
-                tst = os.stat(tgt)  # битая ссылка -> OSError
+                tst = os.stat(tgt)  # broken link -> OSError
             except OSError:
                 continue
             if (hub_s is None or tgt.startswith(root_s + os.sep)
@@ -295,10 +299,11 @@ def _dir_size(root: Path, hub_root: Path | None = None) -> int:
 
 
 def scan_installed(hf_hub: Path):
-    """[(org/repo, human_size)] — только LLM: safetensors + токенизатор.
+    """[(org/repo, human_size)] — LLMs only: safetensors + tokenizer.
 
-    safetensors-ссылки проверяются на резолв: у недокачанных моделей часть
-    шардов битая (цели нет) — размер честный, с пометкой ⚠."""
+    safetensors links are checked for resolution: partially downloaded models
+    have broken shard links (missing targets) — the size stays honest, with
+    a ⚠ note."""
     out = []
     if not hf_hub.is_dir():
         return out
@@ -326,16 +331,16 @@ def scan_installed(hf_hub: Path):
         size = _dir_size(d, hf_hub)
         sz = ui.human_bytes(size) if size else "?"
         if n_st > n_st_ok:
-            sz += f" ⚠{n_st - n_st_ok} файл(ов) нет"
+            sz += f" ⚠{n_st - n_st_ok} missing"
         out.append(("/".join(parts), sz))
     return out
 
 
 def delete_model(hf_hub: Path, repo: str) -> None:
-    """Удаляет модель: каталог models--org--repo + её файлы в общем CAS
-    hub/blobs/<xx>/<sha>, если на них не ссылается другая модель."""
+    """Delete a model: the models--org--repo dir + its files in the shared
+    CAS hub/blobs/<xx>/<sha>, unless another model still references them."""
     d = model_dir(hf_hub, repo)
-    cas = os.path.realpath(hf_hub / "blobs")  # /var -> /private/var на macOS
+    cas = os.path.realpath(hf_hub / "blobs")  # /var -> /private/var on macOS
     targets = set()
     for dirpath, _dirs, files in os.walk(d):
         for f in files:
@@ -369,7 +374,7 @@ def delete_model(hf_hub: Path, repo: str) -> None:
         try:
             os.unlink(tgt)
             try:
-                os.rmdir(os.path.dirname(tgt))  # пустой <xx>/ приберём
+                os.rmdir(os.path.dirname(tgt))  # clean up the empty <xx>/ shard dir
             except OSError:
                 pass
         except OSError:
@@ -377,7 +382,7 @@ def delete_model(hf_hub: Path, repo: str) -> None:
 
 
 def model_ctx(hf_hub: Path, repo: str) -> int:
-    """Context window из config.json модели (включая text_config)."""
+    """Context window from the model's config.json (including text_config)."""
     for snap in (model_dir(hf_hub, repo) / "snapshots").glob("*"):
         cfg = snap / "config.json"
         if not cfg.is_file():

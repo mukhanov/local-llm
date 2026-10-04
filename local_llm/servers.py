@@ -1,9 +1,9 @@
-"""Жизненный цикл mlx_lm.server (:8080, OpenAI) и litellm (:4000, OpenAI +
-Anthropic-мост): конфиг litellm, старт, ожидание готовности, прогрев, стоп.
+"""Lifecycle of mlx_lm.server (:8080, OpenAI) and litellm (:4000, OpenAI +
+Anthropic bridge): litellm config, start, readiness wait, warmup, stop.
 
-Серверы — foreground-дети нашего процесса (без nohup/демонов): выход из
-монитора или Ctrl-C убивает всё разом (см. cli.run_stack -> finally).
-"""
+The servers run as foreground children of our process (no nohup/daemons):
+exiting the monitor or Ctrl-C kills everything at once (see cli.run_stack ->
+finally)."""
 import json
 import os
 import shutil
@@ -19,8 +19,9 @@ from . import hf, ui
 MLX_LOG = "/tmp/mlx-server.log"
 LITELLM_LOG = "/tmp/litellm.log"
 
-# Popen'ы живых детей — убиваются в stop_children()
+# Popen handles of live children — killed in stop_children()
 children: list[subprocess.Popen] = []
+
 
 _MLX_PATTERN = r"mlx_lm\.server"
 
@@ -49,7 +50,7 @@ def _pkill(pattern: str) -> bool:
 
 
 def stop_all() -> None:
-    """Для `local-llm stop`: прибить утёкшие с прошлого запуска процессы."""
+    """For `local-llm stop`: kill processes leaked from a previous run."""
     ui.info("Stopping servers")
     ui.ok("mlx_lm.server stopped" if _pkill(_MLX_PATTERN)
           else "mlx_lm.server not running")
@@ -75,7 +76,7 @@ def ensure_litellm() -> None:
     subprocess.run(["uv", "tool", "install", "litellm"], check=True)
 
 
-def _wait_ready(url: str, proc: subprocess.Popen, timeout: int, log: str,
+def _wait_ready(url: str, proc, timeout: int, log: str,
                 what: str, step: int = 3) -> int:
     waited = 0
     while not http_ok(url):
@@ -98,8 +99,8 @@ def start_mlx(cfg, model: str) -> None:
     ui.info(f"Starting mlx_lm.server on :{cfg.mlx_port}")
     _pkill(_MLX_PATTERN)
     time.sleep(1)
-    # из коробки mlx живёт в ~/.ollmlx/venv (лаунчер); при установке через
-    # pipx/uv-tool запускаемся из того окружения, где стоит пакет
+    # by default mlx lives in ~/.ollmlx/venv (the launcher); under
+    # pipx/uv-tool installs, run from the environment the package is in
     python = (str(cfg.venv_python) if cfg.venv_python.exists()
               else sys.executable)
     ctx = hf.model_ctx(cfg.hf_hub, model)
@@ -133,7 +134,7 @@ model_list:
       api_base: "http://127.0.0.1:{cfg.mlx_port}/v1"
       api_key: "none"
       request_timeout: 600
-  - model_name: "local"          # алиас без слэша: pi/omp шлют в API голый id из каталога
+  - model_name: "local"          # slash-free alias: pi/omp send the bare catalog id to the API
     litellm_params:
       model: "openai/{model}"
       api_base: "http://127.0.0.1:{cfg.mlx_port}/v1"
@@ -158,7 +159,7 @@ def start_litellm(cfg, model: str) -> None:
     ui.info(f"Starting litellm on :{cfg.litellm_port}")
     _write_litellm_config(cfg, model)
     env = dict(os.environ)
-    # Anthropic-мост /v1/messages -> chat/completions (mlx не умеет /v1/responses)
+    # Anthropic bridge /v1/messages -> chat/completions (mlx has no /v1/responses)
     env["LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES"] = "1"
     log = open(LITELLM_LOG, "wb")
     try:
@@ -174,7 +175,7 @@ def start_litellm(cfg, model: str) -> None:
 
 
 def warmup(cfg) -> None:
-    """Сквозной прогрев: litellm (через алиас local, как клиенты) -> mlx."""
+    """End-to-end warmup: litellm (via the `local` alias, like the clients) -> mlx."""
     ui.info("Warmup request")
     req = urllib.request.Request(
         f"http://127.0.0.1:{cfg.litellm_port}/v1/chat/completions",
@@ -189,4 +190,4 @@ def warmup(cfg) -> None:
             r.read()
         ui.ok("e2e OK")
     except (OSError, urllib.error.URLError) as exc:
-        ui.warn(f"warmup failed ({exc}) — см. {LITELLM_LOG} и {MLX_LOG}")
+        ui.warn(f"warmup failed ({exc}) — see {LITELLM_LOG} and {MLX_LOG}")

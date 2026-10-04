@@ -1,8 +1,8 @@
-"""Выбор модели: curses-TUI (скролл/поиск/догрузка/удаление) и текстовый
-фолбек, когда терминал не тянет curses (не tty и т.п.).
+"""Model picker: a curses TUI (scroll/search/load-more/delete) and a plain
+text fallback for terminals that can't run curses (not a tty, etc.).
 
-Точки входа:
-  pick_model(cfg) -> str | None   — TUI, при ошибке среды — текстовый список
+Entry points:
+  pick_model(cfg) -> str | None   — TUI, falls back to the text list on env errors
   pick_plain(cfg, ...) -> str | None
 """
 import curses
@@ -12,29 +12,29 @@ from . import hf, models, ui
 
 
 class EnvError(Exception):
-    """Терминал/среда не подходят для curses — зовите текстовый фолбек."""
+    """Terminal/environment is not suitable for curses — use the text fallback."""
 
 
 def pick_model(cfg) -> str | None:
-    """TUI-выбор; None — пользователь отменил. EnvError наружу не идёт:
-    ловится здесь и включается текстовый фолбек."""
+    """TUI picker; None means the user cancelled. EnvError never escapes:
+    it's caught here and switches to the plain-text fallback."""
     sys_ram = ui.total_ram_gb()
     recommended = models.recommend_for_ram(sys_ram)
     try:
         return pick_tui(cfg, sys_ram, recommended)
     except EnvError:
-        ui.warn("TUI-выбор недоступен в этом терминале — показываю простой список")
+        ui.warn("TUI unavailable in this terminal — showing a plain list")
         return pick_plain(cfg, sys_ram, recommended)
 
 
 # --- curses TUI ----------------------------------------------------------------
 
-LIMIT = 50  # размер страницы HF API для догрузки
+LIMIT = 50  # HF API page size for load-more
 
 
 def pick_tui(cfg, sys_ram: int, recommended: str) -> str | None:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        raise EnvError("не tty")
+        raise EnvError("not a tty")
     ui.force_utf8_locale()
     ui.force_compatible_term()
     result = {}
@@ -71,7 +71,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
         return curses.color_pair(n)
 
     def entries():
-        """Скачанные сверху, ниже — удалённые в порядке текущей сортировки."""
+        """Installed first, then remote entries in the current sort order."""
         ents = []
         q = query.lower()
         for rid, sz in installed:
@@ -96,21 +96,21 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
     def load_more():
         nonlocal skip, remote, has_more, status
         if not has_more:
-            status = " HF: все доступные страницы загружены"
+            status = " HF: all pages loaded"
             return
-        status = f" загрузка моделей {skip + 1}–{skip + LIMIT} с HF…"
+        status = f" loading models {skip + 1}–{skip + LIMIT} from HF…"
         draw()
         stdscr.refresh()
         try:
             page = hf.fetch_page(skip, LIMIT, cfg.hf_token)
         except Exception as exc:
-            status = f" HF API недоступен: {exc}"
+            status = f" HF API unavailable: {exc}"
             return
         skip += len(page)
         known = {m["id"] for m in remote}
         remote += [m for m in page if m["id"] not in known]
         has_more = len(page) == LIMIT
-        status = f" с HF загружено: {len(remote)} (l — ещё)"
+        status = f" loaded from HF: {len(remote)} (l — more)"
 
     def draw():
         nonlocal cursor, scroll_off
@@ -120,9 +120,9 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
         for e in ents:
             kind = "inst" if e["inst"] else "remote"
             if kind != prev:
-                title = ("💿 Скачанные" if kind == "inst" else
-                         ("☁ HuggingFace · по совместимости" if sort_mode == "fit"
-                          else "☁ HuggingFace · по загрузкам"))
+                title = ("💿 Installed" if kind == "inst" else
+                         ("☁ HuggingFace · by fit" if sort_mode == "fit"
+                          else "☁ HuggingFace · by downloads"))
                 rows.append(("hdr", title))
                 prev = kind
             rows.append(("ent", e))
@@ -130,7 +130,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
                 cur_row = len(rows) - 1
             ei += 1
         if not rows:
-            rows = [("hdr", "ничего не найдено" if query else "список пуст")]
+            rows = [("hdr", "nothing found" if query else "list is empty")]
             cur_row = 0
 
         h, w = stdscr.getmaxyx()
@@ -142,8 +142,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
             except curses.error:
                 pass
 
-        add(0, 0, f" выбор модели — RAM {sys_ram}GB · {ui.gpu_name()} · сортировка: "
-            f"{'по совместимости' if sort_mode == 'fit' else 'по загрузкам'} (s — сменить)",
+        add(0, 0, f" model picker — RAM {sys_ram}GB · {ui.gpu_name()} · sort: "
+            f"{'by fit' if sort_mode == 'fit' else 'by downloads'} (s — toggle)",
             B | col(4))
 
         list_h = max(1, h - 5)
@@ -162,13 +162,13 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
                 continue
             e = payload
             if e["inst"]:
-                right = f"{e['size']} на диске"
+                right = f"{e['size']} on disk"
             else:
                 ram = f"~{e['rn']:.0f}GB" if e["rn"] is not None else "?GB"
                 moe = " · MoE" if e["active"] else ""
                 right = f"{ram} RAM{moe} · ↓{ui.human_downloads(e['dl'])} · ⭐{e['likes']}"
                 if e["rn"] is not None and e["rn"] > sys_ram:
-                    right += " ⚠не влезет"
+                    right += " ⚠won't fit"
             mark = "▸ " if i == cur_row else "  "
             rec = " ★" if e["id"] == recommended else ""
             name_w = max(10, w - len(mark) - len(right) - 3)
@@ -185,28 +185,28 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
             add(yy, 0, f"{mark}{nm}{rec}{' ' * pad}{right}", attr)
 
         if searching:
-            hint = f" поиск: {query}█   Enter — применить · Esc — сброс"
+            hint = f" search: {query}█   Enter — apply · Esc — clear"
         else:
-            hint = (" j/k↑↓ PgUp/PgDn g/G · / поиск · l ещё с HF · s сортировка ·"
-                    " d удалить · Enter выбрать · q отмена")
+            hint = (" j/k↑↓ PgUp/PgDn g/G · / search · l more from HF · s sort ·"
+                    " d delete · Enter select · q cancel")
         add(h - 2, 0, hint, DIM)
         if confirm is not None:
-            add(h - 1, 0, f" удалить {confirm['id']} ({confirm['size']}) с диска? y/n",
+            add(h - 1, 0, f" delete {confirm['id']} ({confirm['size']}) from disk? y/n",
                 B | col(3))
         elif status:
             add(h - 1, 0, status, DIM)
         stdscr.refresh()
 
-    status = " загрузка топа MLX-моделей с HuggingFace…"
+    status = " loading top MLX models from HuggingFace…"
     draw()
     try:
         page = hf.fetch_page(0, LIMIT, cfg.hf_token)
         skip = len(page)
         remote = list(page)
         has_more = len(page) == LIMIT
-        status = f" с HF загружено: {len(remote)} (l — ещё)"
+        status = f" loaded from HF: {len(remote)} (l — more)"
     except Exception as exc:
-        status = f" HF API недоступен: {exc} — показаны только скачанные"
+        status = f" HF API unavailable: {exc} — showing installed only"
 
     while True:
         draw()
@@ -217,9 +217,9 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
             if ch in (ord("y"), ord("Y")):
                 try:
                     hf.delete_model(cfg.hf_hub, confirm["id"])
-                    status = f" удалено: {confirm['id']} (освобождено {confirm['size']})"
+                    status = f" deleted: {confirm['id']} (freed {confirm['size']})"
                 except OSError as exc:
-                    status = f" не удалось удалить: {exc}"
+                    status = f" could not delete: {exc}"
                 installed = hf.scan_installed(cfg.hf_hub)
                 inst_ids = {rid for rid, _ in installed}
             else:
@@ -245,7 +245,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
             if cursor < len(ents) - 1:
                 cursor += 1
             elif has_more:
-                load_more()   # вниз за край — подгружаем следующую страницу
+                load_more()   # past the end — fetch the next page
         elif ch == curses.KEY_PPAGE:
             cursor = max(0, cursor - max(1, len(ents) // 2))
         elif ch in (curses.KEY_NPAGE, ord(" ")):
@@ -266,47 +266,47 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
                 confirm = ents[cursor]
 
 
-# --- текстовый фолбек ----------------------------------------------------------
+# --- plain-text fallback ---------------------------------------------------------
 
 def pick_plain(cfg, sys_ram: int, recommended: str) -> str | None:
-    """Статический список: скачанные сверху, ниже топ-10 с HF. Читает stdin."""
+    """Static list: installed first, then the HF top-10. Reads stdin."""
     installed = hf.scan_installed(cfg.hf_hub)
     print()
-    ui.info("🖥️  Системная информация")
+    ui.info("🖥️  System info")
     print(f"   RAM: {sys_ram}GB | GPU: {ui.gpu_name()}")
-    print(f"   💡 Рекомендация: {recommended} (~{models.ram_need_gb(recommended)}GB RAM)")
+    print(f"   💡 Recommended: {recommended} (~{models.ram_need_gb(recommended)}GB RAM)")
     print()
-    ui.info("📊 Загрузка топ MLX-моделей с HuggingFace...")
+    ui.info("📊 Loading top MLX models from HuggingFace...")
     print()
 
     try:
         page = hf.fetch_page(0, 30, cfg.hf_token)
         entries = [(m["id"], m["downloads"], m["likes"]) for m in page]
     except Exception:
-        ui.warn("Не удалось получить данные из HF API, используем кэш")
+        ui.warn("HF API unavailable, using the fallback list")
         entries = models.FALLBACK_TRENDING
 
     shown: list[str] = []
     i = 1
     if installed:
-        print("   💿 Скачанные модели (стартуют без загрузки):\n")
+        print("   💿 Installed models (start without downloading):\n")
         for rid, size in installed:
             mark = " ★ " if rid == recommended else "   "
             print(f"{mark}{i:2d}) {rid}")
             print(f"      {models.describe(rid)}")
-            print(f"      💾 {size} на диске | ~{models.ram_need_gb(rid)}GB RAM")
+            print(f"      💾 {size} on disk | ~{models.ram_need_gb(rid)}GB RAM")
             shown.append(rid)
             i += 1
             print()
-        print("   📥 Топ MLX-моделей с HuggingFace:\n")
+        print("   📥 Top MLX models from HuggingFace:\n")
     else:
-        print("   📥 Топ 10 MLX-моделей по загрузкам (скачанных нет):\n")
+        print("   📥 Top 10 MLX models by downloads (none installed yet):\n")
 
     shown_remote = 0
     for model, downloads, likes in entries:
         if shown_remote >= 10:
             break
-        if model in shown:      # скачанные уже показаны выше — не дублируем
+        if model in shown:      # installed are already listed above — no duplicates
             continue
         rec = "  ★ " if model == recommended else "    "
         dl = ui.human_downloads(downloads)
@@ -319,10 +319,10 @@ def pick_plain(cfg, sys_ram: int, recommended: str) -> str | None:
         shown_remote += 1
         print()
 
-    print("💡 Подсказка: номер модели или org/repo из HuggingFace |"
-          " удалить скачанную: local-llm rm")
+    print("💡 Tip: pick a number or an org/repo from HuggingFace |"
+          " delete an installed model: local-llm rm")
     try:
-        choice = input("?# Выберите модель: ").strip()
+        choice = input("?# Pick a model: ").strip()
     except EOFError:
         return None
     if not choice:
@@ -333,5 +333,5 @@ def pick_plain(cfg, sys_ram: int, recommended: str) -> str | None:
             return shown[idx - 1]
     if "/" in choice:
         return choice
-    ui.warn(f"Неверный выбор, используем рекомендованную: {recommended}")
+    ui.warn(f"Invalid choice, using the recommended one: {recommended}")
     return recommended

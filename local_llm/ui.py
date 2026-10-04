@@ -1,4 +1,4 @@
-"""Мелкие helpers: цветной вывод, терминал/локаль, железо, форматирование."""
+"""Small helpers: colored output, terminal/locale handling, hardware, formatting."""
 import locale
 import os
 import platform
@@ -18,8 +18,9 @@ def warn(msg: str) -> None:
 
 
 def force_utf8_locale() -> None:
-    """Без UTF-8-локали ncurses молча рисует '?' вместо █/●/—. Берём локаль
-    из окружения, а если она не UTF-8 — форсим en_US.UTF-8. Звать до initscr."""
+    """Without a UTF-8 locale ncurses silently draws '?' instead of █/●/—.
+    Try locales from the environment; if none is UTF-8, force en_US.UTF-8.
+    Call before initscr."""
     cands = [os.environ.get(k) for k in ("LC_ALL", "LC_CTYPE", "LANG")]
     cands += ["en_US.UTF-8", "C.UTF-8"]
     for cand in filter(None, cands):
@@ -32,15 +33,16 @@ def force_utf8_locale() -> None:
 
 
 def force_compatible_term() -> None:
-    """TERM=xterm-ghostty включает terminfo-опцию rep (CSI Ps b «повтор глифа»),
-    с которой ncurses портит multibyte-символы: шлёт один байт из трёх `█` ->
-    agterm рендерит это как �. У xterm-256color rep нет — вывод чистый
-    (сверено побайтовым захватом вывода монитора). Звать до initscr."""
+    """TERM=xterm-ghostty enables the terminfo 'rep' capability (CSI Ps b
+    "repeat glyph"), with which ncurses corrupts multibyte characters: it
+    sends one byte out of a three-byte `█`, and agterm renders it as �.
+    xterm-256color has no 'rep' — output is clean (verified by capturing
+    the monitor's output byte-by-byte). Call before initscr."""
     os.environ["TERM"] = "xterm-256color"
 
 
 def total_ram_gb() -> int:
-    """Полная RAM машины в GB (macOS: hw.memsize — байты)."""
+    """Total machine RAM in GB (macOS: hw.memsize is in bytes)."""
     try:
         out = subprocess.run(
             ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True

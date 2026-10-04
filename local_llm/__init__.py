@@ -1,15 +1,15 @@
-"""local-llm — локальный MLX-стек: модель + OpenAI/Anthropic API + монитор.
+"""local-llm — local MLX stack: a model + OpenAI/Anthropic APIs + a monitor.
 
-Модули:
-  config   — пути, порты, env-настройки
-  ui       — цветной вывод, терминал/локаль, железо
-  models   — знания о моделях: парсинг имени, скоринг совместимости, рекомендации
-  hf       — HuggingFace: DoH-обход DNS, API топа, кэш, загрузка/удаление
-  picker   — интерактивный выбор модели (curses TUI + текстовый фолбек)
-  servers  — жизненный цикл mlx_lm.server и litellm
-  clients  — конфиги pi / omp / claude
-  monitor  — htop-подобный TUI-монитор стека
-  cli      — команды и оркестрация
+Modules:
+  config   — paths, ports, env-driven settings
+  ui       — colored output, terminal/locale handling, hardware info
+  models   — model knowledge: name parsing, hardware-fit scoring, recommendations
+  hf       — HuggingFace: DoH DNS workaround, top-list API, cache, download/delete
+  picker   — interactive model picker (curses TUI + plain-text fallback)
+  servers  — mlx_lm.server and litellm lifecycle
+  clients  — pi / omp / claude config writer
+  monitor  — htop-style stack monitor
+  cli      — commands and orchestration
 """
 
 __version__ = "2.0.0"

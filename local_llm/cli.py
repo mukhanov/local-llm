@@ -1,4 +1,4 @@
-"""Команды и оркестрация: run / stop / rm / list / help."""
+"""Commands and orchestration: run / stop / rm / list / help."""
 import os
 import sys
 from pathlib import Path
@@ -7,30 +7,30 @@ from . import clients, hf, models, monitor, picker, servers, ui
 from .config import Config
 
 USAGE = """\
-local-llm — поднять локальную MLX-модель + API для claude / pi / omp.
+local-llm — bring up a local MLX model + an API for claude / pi / omp.
 
-Что делает:
-  1. Показывает локальные/рекомендованные модели (TUI: скролл, поиск, догрузка
-     с HuggingFace, сортировка по совместимости с железом), качает выбранную.
-  2. Запускает mlx_lm.server (OpenAI API) и litellm-прокси (OpenAI
-     /v1/chat/completions + Anthropic /v1/messages для Claude Code) — как
-     foreground-дети, без демонов: выход из монитора или Ctrl-C останавливает
-     всё разом.
-  3. Прописывает модель (+ фиксированный алиас ollmlx/local) в
-     ~/.pi/agent/models.json, ~/.omp/agent/models.json и генерирует
+What it does:
+  1. Shows local/recommended models (TUI: scroll, search, load-more from
+     HuggingFace, sorting by hardware fit), downloads the chosen one.
+  2. Starts mlx_lm.server (OpenAI API) and a litellm proxy (OpenAI
+     /v1/chat/completions + Anthropic /v1/messages for Claude Code) — as
+     foreground children, no daemons: exiting the monitor or Ctrl-C stops
+     everything at once.
+  3. Registers the model (+ the fixed alias ollmlx/local) in
+     ~/.pi/agent/models.json, ~/.omp/agent/models.json and generates
      ~/.ollmlx/claude-local.json.
-  4. Показывает htop-подобный TUI-монитор: CPU по ядрам + график истории,
-     RAM/swap, статус серверов и команды запуска pi/omp/claude.
+  4. Shows an htop-style TUI monitor: per-core CPU + a history graph,
+     RAM/swap, server status and the pi/omp/claude launch commands.
 
-Использование (symlink: ~/bin/local-llm):
-  local-llm                # интерактивный TUI-выбор модели + монитор
-  local-llm <org/model>    # без вопросов
-  local-llm list           # показать скачанные модели (с размерами)
-  local-llm stop           # прибить утёкшие с прошлого запуска процессы
-  local-llm rm [org/repo…] # удалить скачанные модели с диска (без аргументов — меню)
-  local-llm token [hf_…]   # HF-токен: показать / сохранить / --clear (или env HF_TOKEN)
+Usage (symlink: ~/bin/local-llm):
+  local-llm                # interactive TUI model picker + monitor
+  local-llm <org/model>    # no questions asked
+  local-llm list           # show downloaded models (with sizes)
+  local-llm stop           # kill processes leaked from a previous run
+  local-llm rm [org/repo…] # delete downloaded models from disk (no args — menu)
+  local-llm token [hf_…]   # HF token: show / save / --clear (or env HF_TOKEN)
 
-Env: MLX_KV_BITS=8 (квант KV-кэша, 0=off), MLX_PROMPT_CACHE_BYTES (0=off),
+Env: MLX_KV_BITS=8 (KV-cache quantization, 0=off), MLX_PROMPT_CACHE_BYTES (0=off),
      MLX_PORT, LITELLM_PORT, LOAD_TIMEOUT, OLLMLX_HOME, HF_HUB_CACHE"""
 
 
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     if not argv:
         model = picker.pick_model(cfg)
         if model is None:
-            ui.warn("выбор отменён — выход")
+            ui.warn("selection cancelled — exiting")
             return 0
         return run_stack(cfg, model)
     cmd, rest = argv[0], argv[1:]
@@ -58,10 +58,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_list(cfg)
     if "/" in cmd:
         return run_stack(cfg, cmd)
-    ui.warn(f"'{cmd}' — не похоже на org/model, открываю выбор")
+    ui.warn(f"'{cmd}' doesn't look like org/model, opening the picker")
     model = picker.pick_model(cfg)
     if model is None:
-        ui.warn("выбор отменён — выход")
+        ui.warn("selection cancelled — exiting")
         return 0
     return run_stack(cfg, model)
 
@@ -81,57 +81,57 @@ def run_stack(cfg: Config, model: str) -> int:
         clients.write_client_configs(cfg, model)
         servers.warmup(cfg)
         print()
-        ui.info(f"Готово. API: OpenAI и Anthropic на"
+        ui.info(f"Ready. OpenAI and Anthropic APIs on"
                 f" http://127.0.0.1:{cfg.litellm_port}")
         print(f"  pi:      pi --model ollmlx/local   ({model})")
         print(f"  omp:     omp --model ollmlx/local   ({model})")
         print(f"  claude:  claude --settings {cfg.claude_cfg}")
         print()
-        ui.info("Монитор системы (q или Ctrl-C — остановить всё)")
+        ui.info("System monitor (q or Ctrl-C stops everything)")
         home = str(Path.home())
         monitor.run(model, cfg.mlx_port, cfg.litellm_port,
                     str(cfg.claude_cfg).replace(home, "~"))
     finally:
         servers.stop_children()
     print()
-    ui.ok("остановлено — mlx_lm.server и litellm остановлены")
+    ui.ok("stopped — mlx_lm.server and litellm are down")
     return 0
 
 
 def cmd_token(cfg: Config, args: list[str]) -> int:
-    """Показать/сохранить/стереть HF-токен. Приоритет: env HF_TOKEN > файл."""
+    """Show/save/clear the HF token. Precedence: env HF_TOKEN > file."""
     token_file = cfg.ollmlx_home / "hf-token"
     if args and args[0] == "--clear":
         if token_file.exists():
             token_file.unlink()
-            ui.ok("токен удалён")
+            ui.ok("token deleted")
         else:
-            ui.ok("сохранённого токена не было")
+            ui.ok("there was no saved token")
         return 0
     if args:
         cfg.ollmlx_home.mkdir(parents=True, exist_ok=True)
         token_file.write_text(args[0].strip() + "\n")
         token_file.chmod(0o600)
-        ui.ok(f"токен сохранён в {token_file} (chmod 600)")
+        ui.ok(f"token saved to {token_file} (chmod 600)")
         return 0
     token = cfg.hf_token
     if not token:
-        ui.warn("токен не задан: local-llm token <hf_...> или env HF_TOKEN")
+        ui.warn("no token set: local-llm token <hf_...> or env HF_TOKEN")
         return 0
     from_env = bool(os.environ.get("HF_TOKEN") or
                     os.environ.get("HUGGINGFACE_HUB_TOKEN"))
     src = "env HF_TOKEN" if from_env else str(token_file)
     masked = f"{token[:5]}…{token[-4:]}" if len(token) > 12 else "…"
-    ui.info(f"HF-токен: {masked} (источник: {src})")
+    ui.info(f"HF token: {masked} (source: {src})")
     return 0
 
 
 def cmd_list(cfg: Config) -> int:
     installed = hf.scan_installed(cfg.hf_hub)
     if not installed:
-        ui.warn(f"Скачанных LLM-моделей нет ({cfg.hf_hub})")
+        ui.warn(f"No downloaded LLM models ({cfg.hf_hub})")
         return 0
-    ui.info("💿 Скачанные модели:")
+    ui.info("💿 Installed models:")
     for rid, size in installed:
         print(f"  {rid:<62} {size}  ~{models.ram_need_gb(rid)}GB RAM")
     return 0
@@ -141,22 +141,22 @@ def cmd_rm(cfg: Config, args: list[str]) -> int:
     installed = hf.scan_installed(cfg.hf_hub)
     ids = [rid for rid, _ in installed]
     if not installed:
-        ui.warn(f"Скачанных LLM-моделей нет ({cfg.hf_hub})")
+        ui.warn(f"No downloaded LLM models ({cfg.hf_hub})")
         return 0
 
     if args:
         targets = list(args)
     else:
-        ui.info("💿 Скачанные модели:")
+        ui.info("💿 Installed models:")
         for n, (rid, size) in enumerate(installed, 1):
             print(f"  {n:2d}) {rid:<62} {size}")
         try:
-            raw = input("?# Удалить (номера или org/repo через пробел,"
-                        " пусто — отмена): ").strip()
+            raw = input("?# Delete (numbers or org/repo, space-separated,"
+                        " empty — cancel): ").strip()
         except EOFError:
             raw = ""
         if not raw:
-            ui.ok("отмена")
+            ui.ok("cancelled")
             return 0
         targets = []
         for t in raw.split():
@@ -165,37 +165,37 @@ def cmd_rm(cfg: Config, args: list[str]) -> int:
                 if 0 <= idx < len(ids):
                     targets.append(ids[idx])
                 else:
-                    ui.warn(f"нет пункта №{t}")
+                    ui.warn(f"no item #{t}")
             elif "/" in t:
                 targets.append(t)
             else:
-                ui.warn(f"непонятно: {t} (нужен номер или org/repo)")
+                ui.warn(f"can't parse: {t} (need a number or org/repo)")
 
     if not targets:
-        ui.ok("ничего не выбрано")
+        ui.ok("nothing selected")
         return 0
 
     for d in targets:
         if "/" not in d:
-            ui.warn(f"{d} — ожидается org/repo")
+            ui.warn(f"{d} — expected org/repo")
             continue
         if not hf.model_dir(cfg.hf_hub, d).is_dir():
-            ui.warn(f"{d} — не найден в кэше")
+            ui.warn(f"{d} — not found in cache")
             continue
         size = next((s for i, s in installed if i == d), "?")
         try:
-            answer = input(f"?# Удалить {d} ({size})? [y/N] ").strip()
+            answer = input(f"?# Delete {d} ({size})? [y/N] ").strip()
         except EOFError:
-            ui.ok("отмена")
+            ui.ok("cancelled")
             return 0
         if answer.lower().startswith("y"):
             try:
                 hf.delete_model(cfg.hf_hub, d)
-                ui.ok(f"удалено: {d} (освобождено {size})")
+                ui.ok(f"deleted: {d} (freed {size})")
             except OSError as exc:
-                ui.warn(f"не удалось удалить: {exc}")
+                ui.warn(f"could not delete: {exc}")
         else:
-            ui.ok(f"пропущено: {d}")
+            ui.ok(f"skipped: {d}")
     return 0
 
 

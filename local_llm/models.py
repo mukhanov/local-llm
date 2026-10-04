@@ -1,9 +1,9 @@
-"""Знания о моделях: парсинг имени репо, скоринг совместимости с железом,
-рекомендации по RAM и человекочитаемые описания."""
+"""Model knowledge: repo-name parsing, hardware-fit scoring, RAM
+recommendations and human-readable descriptions."""
 import math
 import re
 
-# Топ под конфигурации по RAM (GB -> модель)
+# Top pick per RAM class (GB -> model)
 TOP_MODELS = {
     4: "mlx-community/Qwen3-8B-4bit",
     8: "mlx-community/Qwen3-8B-4bit",
@@ -14,7 +14,7 @@ TOP_MODELS = {
     128: "mlx-community/Qwen3-235B-A22B-3bit",
 }
 
-# Фолбек, когда HF API недоступен: org/repo | downloads | likes
+# Fallback when the HF API is unreachable: org/repo | downloads | likes
 FALLBACK_TRENDING = [
     ("mlx-community/Qwen3-8B-4bit", 150000, 450),
     ("mlx-community/Qwen3-32B-4bit", 85000, 320),
@@ -24,7 +24,7 @@ FALLBACK_TRENDING = [
     ("mlx-community/Qwen3-0.6B-4bit", 180000, 480),
 ]
 
-# семейство -> бонус за качество/поддержку в MLX
+# family -> bonus for quality / MLX support
 FAMILIES = (
     ("qwen3", 8), ("qwen2.5", 4), ("qwen2", 2), ("llama-3.3", 6),
     ("llama-3.2", 5), ("llama-3.1", 5), ("llama-3", 3), ("gpt-oss", 7),
@@ -32,7 +32,7 @@ FAMILIES = (
     ("mixtral", 4), ("mistral", 3), ("deepseek", 4), ("glm", 3), ("phi", 3),
 )
 
-# квант -> байт на параметр в весах
+# quantization -> bytes per parameter in the weights
 QUANTS = (
     ("4bit", 0.58), ("8bit", 1.10), ("6bit", 0.82), ("7bit", 0.95),
     ("5bit", 0.70), ("3bit", 0.45), ("mxfp4", 0.60),
@@ -40,24 +40,24 @@ QUANTS = (
 )
 
 _DESCRIPTIONS = (
-    ("Qwen3-0.6B", "Супер-лёгкая, ~0.6B параметров, мгновенная загрузка"),
-    ("Qwen3-1.7B", "Лёгкая, ~1.7B параметров, быстрая генерация"),
-    ("Qwen3-4B", "Компактная, ~4B параметров, хороший баланс"),
-    ("Qwen3-8B", "Оптимальный баланс, ~8B параметров, высокое качество"),
-    ("Qwen3-32B", "Высокое качество, ~32B параметров, требует 20GB+ RAM"),
-    ("Qwen3-30B-A3B", "MoE архитектура, ~30B активных из 235B, эффективная"),
-    ("Qwen3-235B", "Гигантская модель, ~235B параметров, лучшее качество"),
-    ("Llama-3.1-8B", "Llama 3.1 8B, популярная модель от Meta"),
-    ("Llama-3.2-1B", "Llama 3.1 1B, супер-лёгкая версия"),
-    ("gemma-2-9b", "Gemma 2 9B от Google, качественная открытая модель"),
-    ("Kimi-K2.5", "Kimi K2.5, мощная модель с длинным контекстом"),
-    ("gpt-oss-20b", "Open-source GPT ~20B, MFP4 квантование"),
-    ("Qwen2.5", "Qwen 2.5 серия, предшественник Qwen3"),
-    ("Qwen2", "Qwen 2 серия, классическая версия"),
-    ("Llama-3", "Llama 3 серия от Meta"),
+    ("Qwen3-0.6B", "Ultra-light, ~0.6B params, instant load"),
+    ("Qwen3-1.7B", "Light, ~1.7B params, fast generation"),
+    ("Qwen3-4B", "Compact, ~4B params, good balance"),
+    ("Qwen3-8B", "Optimal balance, ~8B params, high quality"),
+    ("Qwen3-32B", "High quality, ~32B params, needs 20GB+ RAM"),
+    ("Qwen3-30B-A3B", "MoE, ~30B total with 3B active, efficient"),
+    ("Qwen3-235B", "Huge model, ~235B params, best quality"),
+    ("Llama-3.1-8B", "Llama 3.1 8B, popular Meta model"),
+    ("Llama-3.2-1B", "Llama 3.2 1B, ultra-light version"),
+    ("gemma-2-9b", "Gemma 2 9B by Google, solid open model"),
+    ("Kimi-K2.5", "Kimi K2.5, strong long-context model"),
+    ("gpt-oss-20b", "Open-source GPT ~20B, MXFP4 quantized"),
+    ("Qwen2.5", "Qwen 2.5 series, predecessor of Qwen3"),
+    ("Qwen2", "Qwen 2 series, the classic version"),
+    ("Llama-3", "Llama 3 series by Meta"),
 )
 
-# грубая таблица RAM (GB) для имён без распознанного размера
+# rough RAM table (GB) for names without a recognized size
 _RAM_TABLE = (
     ("0.5B", 2), ("0.6B", 2), ("1B", 4), ("1.7B", 4), ("3B", 6), ("4B", 6),
     ("7B", 8), ("8B", 8), ("9B", 8), ("14B", 12), ("20B", 16), ("27B", 16),
@@ -84,11 +84,11 @@ def describe(model: str) -> str:
     for pat, text in _DESCRIPTIONS:
         if pat in model:
             return text
-    return "MLX-модель для Apple Silicon"
+    return "MLX model for Apple Silicon"
 
 
 def parse_model(mid: str):
-    """(total_B, active_B, bpp, family_bonus, moe, instruct) из имени репо."""
+    """(total_B, active_B, bpp, family_bonus, moe, instruct) from repo name."""
     s = mid.lower()
     total = active = None
     m = re.search(r"(\d+(?:\.\d+)?)b[-_ ]?a(\d+(?:\.\d+)?)b", s)   # 235B-A22B
@@ -98,7 +98,7 @@ def parse_model(mid: str):
         m = re.search(r"[-_](\d+(?:\.\d+)?)b(?:[-_]|$)", s)        # -8B- / -0.6B
         if m:
             total = float(m.group(1))
-    bpp = 0.58  # большинство mlx-community репо — 4bit
+    bpp = 0.58  # most mlx-community repos are 4bit
     for q, b in QUANTS:
         if q in s:
             bpp = b
@@ -114,12 +114,12 @@ def parse_model(mid: str):
 
 
 def ram_need(total_b, bpp: float):
-    """Веса + запас: без него Metal легко ловит OOM на KV-кэше."""
+    """Weights + headroom: without it Metal easily OOMs on the KV cache."""
     return None if total_b is None else total_b * bpp + 1.5
 
 
 def ram_need_gb(mid: str) -> int:
-    """Оценка RAM в GB: из имени (параметры × квант), фолбек — таблица."""
+    """RAM estimate in GB: from the name (params × quant), table as fallback."""
     total, _active, bpp, *_ = parse_model(mid)
     rn = ram_need(total, bpp)
     if rn is not None:
@@ -131,23 +131,23 @@ def ram_need_gb(mid: str) -> int:
 
 
 def score(sys_ram: int, mid: str, downloads: int):
-    """Скор совместимости с данным железом: выше — лучше.
+    """Hardware-fit score for this machine: higher is better.
 
-    fit по RAM (вес = параметры × байт/параметр кванта), качество ~ √параметров
-    (пока влезает), MoE-бонус (мало активных параметров — быстро на Apple
-    Silicon), семейство, instruct-вариант; загрузки — только мягкий тайбрейк."""
+    RAM fit (weights = params × bytes/param of the quant), quality ~ √params
+    (while it fits), MoE bonus (few active params — fast on Apple Silicon),
+    family, instruct variant; downloads are only a soft tiebreak."""
     total, active, bpp, fam, moe, instruct = parse_model(mid)
     rn = ram_need(total, bpp)
     sc = 0.0
     if rn is not None:
         if rn <= sys_ram * 0.85:
-            sc += 40          # влезает с запасом
+            sc += 40          # fits with headroom
         elif rn <= sys_ram:
-            sc += 25          # влезает впритык
+            sc += 25          # fits tightly
         elif rn <= sys_ram * 1.2:
-            sc += 5           # только со swap — тормоза
+            sc += 5           # swap only — will be slow
         else:
-            sc -= 35          # не влезет
+            sc -= 35          # won't fit
     if total:
         sc += min(22.0, 6.0 * math.sqrt(total))
     if moe:

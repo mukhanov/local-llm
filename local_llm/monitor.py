@@ -1,6 +1,7 @@
-"""htop-подобный TUI-монитор стека: CPU по ядрам + график истории, RAM/swap,
-статус портов, процессы mlx/litellm с RSS, команды запуска pi/omp/claude и
-хвост логов с ошибками. Блокирует до q/Ctrl-C (серверы остановит cli)."""
+"""htop-style TUI monitor for the stack: per-core CPU + a history graph,
+RAM/swap, port status, mlx/litellm processes with RSS, the pi/omp/claude
+launch commands and a tail of the logs with errors. Blocks until q/Ctrl-C
+(cli stops the servers)."""
 import collections
 import curses
 import os
@@ -15,7 +16,7 @@ LOGS = (("mlx", "/tmp/mlx-server.log"), ("litellm", "/tmp/litellm.log"))
 
 
 def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str) -> None:
-    """Блокирует до выхода (q / Ctrl-C)."""
+    """Blocks until exit (q / Ctrl-C)."""
     ui.force_utf8_locale()
     ui.force_compatible_term()
     try:
@@ -34,8 +35,8 @@ def port_ok(port: int) -> bool:
 
 
 def watch_procs():
-    """[(метка, Process)] для mlx/litellm; process_iter кэширует инстансы,
-    поэтому cpu_percent() между кадрами даёт осмысленные дельты."""
+    """[(label, Process)] for mlx/litellm; process_iter caches instances,
+    so cpu_percent() between frames yields meaningful deltas."""
     out = []
     for p in psutil.process_iter(["pid", "cmdline"]):
         try:
@@ -49,13 +50,13 @@ def watch_procs():
     return out
 
 
-def heat(pct: float) -> int:  # зелёный -> жёлтый -> красный
+def heat(pct: float) -> int:  # green -> yellow -> red
     return 1 if pct < 60 else 2 if pct < 85 else 3
 
 
 def tail_errors(path: str, k: int = 2):
-    """Последние k ошибочных строк лога. Читаем только хвост файла — на живом
-    логе это дёшево и не гоняет мегабайты."""
+    """Last k error lines of a log. Only the tail of the file is read — cheap
+    on a live log, no multi-megabyte scans."""
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
@@ -69,7 +70,7 @@ def tail_errors(path: str, k: int = 2):
 
 
 def tail_lines(path: str, k: int = 2):
-    """Последние k строк лога (не только ошибки): ход генерации, запросы."""
+    """Last k log lines (not only errors): generation progress, requests."""
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
@@ -100,10 +101,10 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
                   (3, curses.COLOR_RED), (4, curses.COLOR_CYAN)):
         curses.init_pair(i, fg, bg)
     B = curses.A_BOLD
-    psutil.cpu_percent(percpu=True)  # прайминг: первый вызов всегда 0
+    psutil.cpu_percent(percpu=True)  # priming: the first call is always 0
     watch_procs()
     stdscr.timeout(1000)
-    curses.flushinp()  # выкинуть ответы терминала на init-запросы curses (ESC[...])
+    curses.flushinp()  # drop terminal replies to curses init queries (ESC[...])
 
     def uptime() -> str:
         s = int(time.time() - start)
@@ -127,8 +128,8 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
             y[0] += 1
 
         def put_bar(label, bw, frac, suffix="", attr=0):
-            """label[███ заполнено цветом, фон dim] suffix — только глифы,
-            которые есть в любом терминальном шрифте (без ░/▁▂▃)."""
+            """label[███ filled with color, dim background] suffix — only
+            glyphs present in any terminal font (no ░/▁▂▃)."""
             f = int(bw * max(0.0, min(1.0, frac)) + 0.5)
             add(y[0], 0, label)
             add(y[0], len(label), "█" * f, curses.color_pair(heat(frac * 100)))
@@ -143,33 +144,34 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
         vm, sw = psutil.virtual_memory(), psutil.swap_memory()
         procs = watch_procs()
 
-        # --- шапка ---
+        # --- header ---
         put(f" ollmlx — {model}", B | curses.color_pair(4))
         mlx = f"mlx :{mlx_port} ●up" if port_ok(mlx_port) else f"mlx :{mlx_port} ○down"
         lit = (f"litellm :{lite_port} ●up" if port_ok(lite_port)
                else f"litellm :{lite_port} ○down")
         put(f" uptime {uptime()}   {mlx}   {lit}   cores {len(percpu)}")
 
-        # бюджет высоты: низ окна (mem/клиенты/процессы/ошибки/логи) виден
-        # всегда, график истории и CPU-по-ядрам получают только остаток
+        # height budget: the bottom of the window (mem/clients/procs/errors/
+        # logs) is always visible; the history graph and per-core rows only
+        # get what's left
         tail = 2 + (1 if sw.total else 0) + 5 + 1 + max(1, len(procs)) + 6 + 6 + 2
         mid = h - y[0] - tail
         half = (len(percpu) + 1) // 2
         cores_h = half if mid >= half + 4 else 0
-        # +2 строки на рамку графика: blank + итог-CPU + верх/низ рамки
+        # +2 lines for the graph frame: blank + total CPU + frame top/bottom
         graph_h = min(8, mid - cores_h - 4)
         if graph_h < 2:
             graph_h = 0
 
-        # --- cpu: итог + график истории в рамке (столбики, как в htop) ---
+        # --- cpu: total + framed history graph (bars, like htop) ---
         bw = max(10, w - 27)
         put()
         put_bar(" CPU [", bw, total / 100, f"] {total:5.1f}%", B)
         if graph_h:
-            # рамка: │ на 5 (под '[' итогового бара), данные 6..6+bw-1,
-            # │ на 6+bw (под ']'). Границы графика без неё не читаются.
+            # frame: │ at col 5 (under '[' of the total bar), data 6..6+bw-1,
+            # │ at 6+bw (under ']'). Without it the graph edges are unreadable.
             gl, gr = 5, 6 + bw
-            title = " история CPU " if bw >= 15 else ""
+            title = " CPU history " if bw >= 15 else ""
             add(y[0], gl,
                 "┌" + title + "─" * max(0, gr - gl + 1 - 2 - len(title)) + "┐",
                 curses.A_DIM)
@@ -188,12 +190,12 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
             add(y[0], gl, "└" + "─" * (gr - gl - 1) + "┘", curses.A_DIM)
             y[0] += 1
 
-        # --- cpu: по ядрам, две колонки в общей рамке ---
+        # --- cpu: per core, two columns in a shared frame ---
         if cores_h:
             put()
             cw = max(6, (w - 26) // 2)
-            cl, cr = 0, 2 * cw + 23   # │ на 0, ядра с 1, │ за второй колонкой
-            title = " ядра " if cr >= 12 else ""
+            cl, cr = 0, 2 * cw + 23   # │ at 0, cores from 1, │ after the second column
+            title = " cores " if cr >= 12 else ""
             add(y[0], cl,
                 "┌" + title + "─" * max(0, cr - cl + 1 - 2 - len(title)) + "┐",
                 curses.A_DIM)
@@ -213,7 +215,7 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
             add(y[0], cl, "└" + "─" * (cr - cl - 1) + "┘", curses.A_DIM)
             y[0] += 1
 
-        # --- память ---
+        # --- memory ---
         put()
         put_bar(" MEM [", bw, vm.percent / 100,
                 f"] {vm.percent:3.0f}%  {ui.human_bytes(vm.used)}/{ui.human_bytes(vm.total)}")
@@ -221,13 +223,13 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
             put_bar(" SWP [", bw, sw.percent / 100,
                     f"] {sw.percent:3.0f}%  {ui.human_bytes(sw.used)}/{ui.human_bytes(sw.total)}")
 
-        # --- команды запуска клиентов: всегда перед глазами ---
+        # --- client launch commands: always in view ---
         put()
-        put(" запуск клиентов:", curses.A_DIM)
+        put(" client launch commands:", curses.A_DIM)
         for name, cmd in client_cmds:
             put(f"   {name:<6}  {cmd}", B)
 
-        # --- наши процессы ---
+        # --- our processes ---
         put()
         for name, p in procs:
             try:
@@ -238,31 +240,31 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
             except Exception:
                 pass
         if not procs:
-            put(" mlx/litellm процессы не найдены", curses.color_pair(3))
+            put(" no mlx/litellm processes found", curses.color_pair(3))
 
-        # --- последние ошибки из логов стека ---
+        # --- recent errors from the stack logs ---
         put()
-        put(" последние ошибки:", curses.A_DIM)
+        put(" recent errors:", curses.A_DIM)
         errs = [(tag, l) for tag, path in LOGS for l in tail_errors(path)]
         if errs:
             for tag, l in errs[-4:]:
                 put(f" [{tag}] {l}", curses.color_pair(3))
         else:
-            put(" ошибок нет", curses.color_pair(1))
+            put(" no errors", curses.color_pair(1))
 
-        # --- хвост логов: что серверы делают прямо сейчас ---
+        # --- log tail: what the servers are doing right now ---
         put()
-        put(" последние логи:", curses.A_DIM)
+        put(" latest logs:", curses.A_DIM)
         shown = [(tag, l) for tag, path in LOGS for l in tail_lines(path)]
         if shown:
             for tag, l in shown[-4:]:
                 put(f" [{tag}] {l}", curses.A_DIM)
         else:
-            put(" логи пусты", curses.A_DIM)
+            put(" logs empty", curses.A_DIM)
 
-        # --- подвал ---
+        # --- footer ---
         put()
-        put(" q — выход | логи: /tmp/mlx-server.log, /tmp/litellm.log", curses.A_DIM)
+        put(" q — quit | logs: /tmp/mlx-server.log, /tmp/litellm.log", curses.A_DIM)
         stdscr.refresh()
 
         ch = stdscr.getch()

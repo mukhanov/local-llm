@@ -1,5 +1,6 @@
-"""Конфиги клиентов: pi/omp (models.json, провайдер ollmlx) и claude
-(claude-local.json с env на litellm). Клиенты всегда запускаются одинаково."""
+"""Client configs: pi/omp (models.json, provider "ollmlx") and claude
+(claude-local.json with env pointing at litellm). Clients are always
+launched the same way."""
 import json
 from pathlib import Path
 
@@ -45,7 +46,7 @@ def write_client_configs(cfg, model: str) -> None:
         f.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
         ui.ok(str(f))
 
-    # omp кэширует каталог в models.yml после первого чтения models.json — сбрасываем
+    # omp caches the catalog in models.yml after first reading models.json — reset it
     omp_cache = Path("~/.omp/agent/models.yml").expanduser()
     if omp_cache.exists():
         omp_cache.unlink()

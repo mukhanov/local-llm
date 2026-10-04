@@ -1,4 +1,4 @@
-"""Пути, порты и настройки. Всё настраивается через env (см. --help)."""
+"""Paths, ports and settings. Everything is configured via env (see --help)."""
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,15 +11,15 @@ class Config:
     mlx_port: int
     litellm_port: int
     api_key: str
-    # Квант KV-кэша: длинные промпты (claude шлёт ~30k токенов) на больших
-    # моделях (~101G из 128G RAM) выедают остаток -> Metal OOM -> generation
-    # thread умирает и сервер до рестарта отвечает 404 на всё. 8 бит = вдвое
-    # меньше памяти. 0 = off.
+    # KV-cache quantization: long prompts (claude sends ~30k tokens) on large
+    # models (~101G of 128G RAM) eat the remainder -> Metal OOM -> the
+    # generation thread dies and the server answers 404 to everything until
+    # restarted. 8 bits = half the memory. 0 = off.
     kv_bits: int
     kv_group_size: int
-    # Cap prompt cache (байт), 0 = без потолка.
+    # Prompt cache cap (bytes), 0 = no cap.
     prompt_cache_bytes: int
-    load_timeout: int  # сек на загрузку весов в память
+    load_timeout: int  # seconds to wait for weights to load
 
     @property
     def venv_python(self) -> Path:
@@ -33,8 +33,8 @@ class Config:
     def claude_cfg(self) -> Path:
         return self.ollmlx_home / "claude-local.json"
 
-    # HF-токен для gated-моделей и бóльших лимитов API: env приоритетнее,
-    # фолбек — приватный файл ~/.ollmlx/hf-token (ставится `local-llm token`).
+    # HF token for gated models and higher API limits: env takes precedence,
+    # fallback is the private file ~/.ollmlx/hf-token (set via `local-llm token`).
     @property
     def hf_token(self) -> str | None:
         env = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")

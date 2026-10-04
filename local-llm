@@ -1,11 +1,11 @@
 #!/bin/sh
-# local-llm — launcher: поднимает venv (зависимости — из pyproject.toml)
-# и запускает пакет. Вся логика — в local_llm/.
+# local-llm — launcher: sets up the venv (dependencies come from pyproject.toml)
+# and runs the package. All the logic lives in local_llm/.
 set -e
 APP_DIR=$(cd "$(dirname "$0")" && pwd)
 OLLMLX="${OLLMLX_HOME:-$HOME/.ollmlx}"
 VENV="$OLLMLX/venv"
-STAMP="$OLLMLX/venv.deps"   # хэш pyproject.toml последней установки
+STAMP="$OLLMLX/venv.deps"   # pyproject.toml hash of the last install
 
 command -v uv >/dev/null 2>&1 || {
   echo "uv is required: curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -18,9 +18,9 @@ if [ ! -x "$VENV/bin/python" ]; then
   rm -f "$STAMP"
 fi
 
-# единственный источник зависимостей — pyproject.toml; ставим пакет целиком
-# (editable: git pull обновляет код без переустановки). Повторяем только когда
-# pyproject изменился — обычный запуск ничего не качает.
+# pyproject.toml is the single source of dependencies; install the whole
+# package (editable: git pull updates the code without reinstalling).
+# Re-run only when pyproject changes — a regular launch downloads nothing.
 hash=$( (sha256sum "$APP_DIR/pyproject.toml" 2>/dev/null \
          || shasum -a 256 "$APP_DIR/pyproject.toml") | cut -d' ' -f1)
 if [ "$(cat "$STAMP" 2>/dev/null)" != "$hash" ]; then

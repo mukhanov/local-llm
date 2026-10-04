@@ -9,15 +9,16 @@ $ local-llm
 ```
 
 ```
- выбор модели — RAM 128GB · Apple M4 Max · сортировка: по совместимости (s — сменить)
-── 💿 Скачанные ────────────────────────────────────────────────────────────────
-   mlx-community/Qwen3-0.6B-4bit                                     335M на диске
-   mlx-community/Qwen3.5-122B-A10B-4bit                               65G на диске
-── ☁ HuggingFace · по совместимости ───────────────────────────────────────────
+ model picker — RAM 64GB · Apple M2 Pro · sort: by fit (s — toggle)
+── 💿 Installed ────────────────────────────────────────────────────────────────
+   mlx-community/Qwen3-1.7B-4bit                                     1.1G on disk
+   mlx-community/Llama-3.1-8B-Instruct-4bit                           4.6G on disk
+── ☁ HuggingFace · by fit ──────────────────────────────────────────────────────
 ▸  mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit    ~19GB RAM · MoE · ↓34K · ⭐16
    mlx-community/gpt-oss-20b-MXFP4-Q8                ~14GB RAM · ↓257K · ⭐96
+   mlx-community/Qwen3-235B-A22B-3bit                ~96GB RAM · MoE · ↓12K · ⭐58 ⚠won't fit
    ...
- j/k↑↓ PgUp/PgDn g/G · / поиск · l ещё с HF · s сортировка · d удалить · Enter выбрать · q отмена
+ j/k↑↓ PgUp/PgDn g/G · / search · l more from HF · s sort · d delete · Enter select · q cancel
 ```
 
 Behind the scenes it starts **mlx_lm.server** (OpenAI API on `:8080`) and a
@@ -30,8 +31,8 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
 - **Model picker (TUI)** — installed models first, then the mlx-community top
   from HuggingFace with paging, search, and hardware-fit sorting: RAM estimate
   per quantization (4/8-bit, MXFP4), MoE awareness, model-family quality
-  bonuses, download-count tiebreak. Models that won't fit are marked
-  `⚠не влезет` ("won't fit").
+  bonuses, download-count tiebreak. Models that won't fit your RAM are marked
+  `⚠won't fit`.
 - **Readable download progress** — a single status line with a progress bar,
   percent, speed, ETA and the current file (native huggingface_hub's three
   interleaved tqdm bars are disabled).
@@ -52,10 +53,8 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
 - [`uv`](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 That's the only manual prerequisite — Python itself and all dependencies are
-installed automatically (see below).
-
-> The TUI and CLI messages are in Russian. The tool itself needs no
-> configuration decisions from you — run it and pick a model.
+installed automatically (see below). Run it and pick a model — no
+configuration decisions needed.
 
 ## Install
 
