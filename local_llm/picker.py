@@ -8,7 +8,7 @@ Entry points:
 import curses
 import sys
 
-from . import hf, models, ui
+from . import hf, llmfit, models, ui
 
 
 class EnvError(Exception):
@@ -20,11 +20,12 @@ def pick_model(cfg) -> str | None:
     it's caught here and switches to the plain-text fallback."""
     sys_ram = ui.total_ram_gb()
     recommended = models.recommend_for_ram(sys_ram)
+    lf = llmfit.load(cfg.ollmlx_home)  # {repo: entry} | None
     try:
-        return pick_tui(cfg, sys_ram, recommended)
+        return pick_tui(cfg, sys_ram, recommended, lf)
     except EnvError:
         ui.warn("TUI unavailable in this terminal — showing a plain list")
-        return pick_plain(cfg, sys_ram, recommended)
+        return pick_plain(cfg, sys_ram, recommended, lf)
 
 
 # --- curses TUI ----------------------------------------------------------------
@@ -32,7 +33,7 @@ def pick_model(cfg) -> str | None:
 LIMIT = 50  # HF API page size for load-more
 
 
-def pick_tui(cfg, sys_ram: int, recommended: str) -> str | None:
+def pick_tui(cfg, sys_ram: int, recommended: str, lf: dict | None) -> str | None:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise EnvError("not a tty")
     ui.force_utf8_locale()
@@ -40,14 +41,16 @@ def pick_tui(cfg, sys_ram: int, recommended: str) -> str | None:
     result = {}
 
     try:
-        curses.wrapper(lambda scr: _tui(scr, cfg, sys_ram, recommended, result))
+        curses.wrapper(
+            lambda scr: _tui(scr, cfg, sys_ram, recommended, lf, result))
     except curses.error as exc:
         raise EnvError(str(exc)) from exc
 
     return result.get("choice")
 
 
-def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
+def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
+         result: dict) -> None:
     installed = hf.scan_installed(cfg.hf_hub)
     inst_ids = {rid for rid, _ in installed}
     remote, skip, has_more = [], 0, True
@@ -72,23 +75,31 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
 
     def entries():
         """Installed first, then remote entries in the current sort order."""
+        def lf_bits(repo):
+            e = (lf or {}).get(repo)
+            return (llmfit.ctx_str(e) if e else None,
+                    bool(e and llmfit.has_tools(e)))
+
         ents = []
         q = query.lower()
         for rid, sz in installed:
             if q and q not in rid.lower():
                 continue
             sc, rn, total, active = models.score(sys_ram, rid, 0)
+            ctx, tools = lf_bits(rid)
             ents.append(dict(id=rid, inst=True, size=sz, dl=0, likes=0, sc=sc,
-                             rn=rn, total=total, active=active))
+                             rn=rn, total=total, active=active, ctx=ctx,
+                             tools=tools))
         rem = []
         for m in remote:
             if m["id"] in inst_ids or (q and q not in m["id"].lower()):
                 continue
             dl = m["downloads"]
             sc, rn, total, active = models.score(sys_ram, m["id"], dl)
+            ctx, tools = lf_bits(m["id"])
             rem.append(dict(id=m["id"], inst=False, size="", dl=dl,
                             likes=m["likes"], sc=sc, rn=rn, total=total,
-                            active=active))
+                            active=active, ctx=ctx, tools=tools))
         rem.sort(key=lambda e: (-e["sc"], -e["dl"]) if sort_mode == "fit"
                  else (-e["dl"], -e["sc"]))
         return ents + rem
@@ -163,10 +174,16 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
             e = payload
             if e["inst"]:
                 right = f"{e['size']} on disk"
+                if e["ctx"]:
+                    right += f" · ctx {e['ctx']}"
             else:
                 ram = f"~{e['rn']:.0f}GB" if e["rn"] is not None else "?GB"
                 moe = " · MoE" if e["active"] else ""
                 right = f"{ram} RAM{moe} · ↓{ui.human_downloads(e['dl'])} · ⭐{e['likes']}"
+                if e["ctx"]:
+                    right += f" · ctx {e['ctx']}"
+                if e["tools"]:
+                    right += " · tools"
                 if e["rn"] is not None and e["rn"] > sys_ram:
                     right += " ⚠won't fit"
             mark = "▸ " if i == cur_row else "  "
@@ -268,8 +285,15 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, result: dict) -> None:
 
 # --- plain-text fallback ---------------------------------------------------------
 
-def pick_plain(cfg, sys_ram: int, recommended: str) -> str | None:
+def pick_plain(cfg, sys_ram: int, recommended: str, lf: dict | None = None) -> str | None:
     """Static list: installed first, then the HF top-10. Reads stdin."""
+    def lf_bits(repo):
+        e = (lf or {}).get(repo)
+        s = f"ctx {llmfit.ctx_str(e)}" if e and llmfit.ctx_str(e) else ""
+        if e and llmfit.has_tools(e):
+            s = (s + " · " if s else "") + "tools"
+        return f" | {s}" if s else ""
+
     installed = hf.scan_installed(cfg.hf_hub)
     print()
     ui.info("🖥️  System info")
@@ -294,7 +318,8 @@ def pick_plain(cfg, sys_ram: int, recommended: str) -> str | None:
             mark = " ★ " if rid == recommended else "   "
             print(f"{mark}{i:2d}) {rid}")
             print(f"      {models.describe(rid)}")
-            print(f"      💾 {size} on disk | ~{models.ram_need_gb(rid)}GB RAM")
+            print(f"      💾 {size} on disk | ~{models.ram_need_gb(rid)}GB RAM"
+                  f"{lf_bits(rid)}")
             shown.append(rid)
             i += 1
             print()
@@ -313,7 +338,7 @@ def pick_plain(cfg, sys_ram: int, recommended: str) -> str | None:
         print(f"{rec}{i:2d}) {model}")
         print(f"      {models.describe(model)}")
         print(f"      📥 {dl} downloads | ⭐ {likes} likes |"
-              f" ~{models.ram_need_gb(model)}GB RAM")
+              f" ~{models.ram_need_gb(model)}GB RAM{lf_bits(model)}")
         shown.append(model)
         i += 1
         shown_remote += 1

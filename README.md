@@ -42,6 +42,10 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   catalogs and generates a Claude Code settings file.
 - **System monitor** — htop-style curses UI: per-core CPU + history graph,
   RAM/swap, server status, process RSS, recent errors from the logs.
+- **llmfit stats** — context length and tool-use capability next to each
+  model in the picker, sourced from the [llmfit](https://github.com/AlexsJones/llmfit)
+  model catalog (mlx-community slice, cached for a week in `~/.ollmlx`,
+  works fully offline between refreshes).
 - **HF token support** — for gated models and API limits; stored outside the
   repo in `~/.ollmlx/hf-token` (chmod 600).
 - **DoH-pinned DNS** — resolves `*.hf.co` via 1.1.1.1 when your TUN proxy
@@ -176,6 +180,7 @@ generation thread — 8-bit keeps a 100GB-class model stable in 128GB RAM.
 |---------------------------------------|----------------------------------|
 | `~/.ollmlx/venv`                      | isolated Python environment      |
 | `~/.ollmlx/hf-token`                  | HF token, chmod 600              |
+| `~/.ollmlx/llmfit-mlx.json.gz`        | llmfit catalog cache (weekly)    |
 | `~/.ollmlx/litellm-config.yaml`       | generated proxy config           |
 | `~/.ollmlx/claude-local.json`         | Claude Code settings             |
 | `~/.pi/agent/models.json`             | `pi` model catalog (merged)      |
@@ -212,6 +217,7 @@ local_llm/
   picker.py        # curses model picker (TUI + plain fallback)
   models.py        # model-string parsing, RAM estimates, fit scoring
   hf.py            # HuggingFace API, downloads, cache management, DoH
+  llmfit.py        # llmfit catalog stats (context length, tools) for the picker
   servers.py       # mlx_lm.server + litellm lifecycle
   clients.py       # pi / omp / Claude Code config writer
   monitor.py       # curses system monitor
