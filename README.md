@@ -11,14 +11,14 @@ $ local-llm
 ```
  model picker — RAM 128GB · Apple M5 Max · sort: by score (s — toggle)
 ── 💿 Installed ────────────────────────────────────────────────────────────────
-   mlx-community/Qwen3.5-122B-A10B-4bit                    ⚡91 · 64.8G on disk · ctx 262K
+▸  mlx-community/Qwen3.5-122B-A10B-4bit                    ⚡91 · 64.8G on disk · ctx 262K
    mlx-community/GLM-4.5-Air-4bit                          ⚡79 · 49.3G on disk · ctx 131K
 ── ☁ HuggingFace · mlx-community · by score ───────────────────────────────────
-▸  mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit   ⚡85 · ~19GB RAM · MoE · ↓34K · ⭐16
-   mlx-community/gpt-oss-20b-MXFP4-Q8                ⚡80 · ~14GB RAM · ↓257K · ⭐96
-   mlx-community/Qwen3-235B-A22B-3bit                ⚡67 · ~96GB RAM · MoE · ↓12K · ⭐58 ⚠won't fit
+   mlx-community/gemma-4-12B-it-qat-4bit             ⚡97 · ~8GB RAM · ↓24K · ⭐29 · ctx 262K
+   mlx-community/gemma-4-12b-coder-fable5-composer2.5-8bit  ⚡97 · ~15GB RAM · ↓2K · ⭐37 · ctx 262K
+   mlx-community/Llama-3.2-11B-Vision-Instruct-4bit  ⚡96 · ~8GB RAM · ↓1K · ⭐8 · ctx 131K · tools
    ...
- ⚡85.2 = quality 63 · speed 100 (103 tok/s) · fit 100 · ctx 100 · ~18GB of 128GB · chat
+ ⚡91.1 = quality 86 · speed 92 (37 tok/s) · fit 100 · ctx 100 · ~70GB of 128GB · Multimodal
  j/k↑↓ PgUp/PgDn g/G · / search · l more · s sort · a all⇄community · d delete · Enter select · q cancel
 ```
 
@@ -48,12 +48,15 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   estimate for exotic quantization names next to each model in the picker,
   plus the **llmfit composite score** (a Python port of llmfit's fit
   calculator, Apache-2.0): quality × speed × memory-fit × context, weighted
-  per use case and keyed to *your* chip's memory bandwidth — the picker's
-  default sort. The row under the cursor gets a one-line breakdown
+  per use case and keyed to *your* chip's memory bandwidth. The list is the
+  whole cached catalog ranked by that score, so the top of the list is
+  llmfit's #1 for your machine (`a` widens it from `mlx-community` to all
+  MLX authors) — and it renders instantly, offline: the weekly cache is
+  enough for browsing, only `/`-search asks HuggingFace about models newer
+  than the catalog. The row under the cursor gets a one-line breakdown
   (`⚡98.2 = quality 96 · speed 100 (53 tok/s) · …`), installed models
-  included. All sourced from the [llmfit](https://github.com/AlexsJones/llmfit)
-  model catalog (MLX-format slice, cached for a week in `~/.ollmlx`,
-  works fully offline between refreshes).
+  included. Sourced from the [llmfit](https://github.com/AlexsJones/llmfit)
+  model catalog (MLX-format slice, cached for a week in `~/.ollmlx`).
 - **HF token support** — for gated models and API limits; stored outside the
   repo in `~/.ollmlx/hf-token` (chmod 600).
 - **DoH-pinned DNS** — resolves `*.hf.co` via 1.1.1.1 when your TUN proxy

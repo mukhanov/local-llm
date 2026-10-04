@@ -54,6 +54,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
     installed = hf.scan_installed(cfg.hf_hub)
     inst_ids = {rid for rid, _ in installed}
     remote, skip, has_more = [], 0, True
+    ranked: list[tuple[float, str, int, int]] = []   # (score, repo, dl, likes)
     sort_mode, query, searching = "fit", "", False
     scope = "community"   # "community": mlx-community org | "all": any author
     cursor = scroll_off = 0
@@ -116,12 +117,40 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                  else lambda e: (-e["dl"], -e["sc"]))
         return ents + rem
 
+    def build_ranked():
+        """The scope's catalog models, best llmfit score for THIS machine
+        first — the same ordering the llmfit CLI prints, not just whatever
+        HF's top-downloads page happens to contain. Empty when the catalog
+        is unavailable (offline without a cache)."""
+        nonlocal ranked
+        ranked = []
+        if not lf:
+            return
+        for rid, e in lf.items():
+            if scope == "community" and not rid.startswith("mlx-community/"):
+                continue
+            s = llmfit.score(e, sys_ram)
+            ranked.append((s["score"] if s else 0.0, rid,
+                           e.get("hf_downloads") or 0, e.get("hf_likes") or 0))
+        ranked.sort(key=lambda t: -t[0])
+
     def load_more():
         nonlocal skip, remote, has_more, status
         if not has_more:
-            status = " HF: all pages loaded"
+            status = " all pages loaded"
             return
         label = "all MLX" if scope == "all" else "mlx-community"
+        if ranked:
+            # local ranking of the whole catalog slice — no network needed
+            page = ranked[skip:skip + LIMIT]
+            skip += LIMIT
+            known = {m["id"] for m in remote}
+            remote += [{"id": rid, "downloads": dl, "likes": likes}
+                       for _sc, rid, dl, likes in page if rid not in known]
+            has_more = skip < len(ranked)
+            status = (f" llmfit-ranked ({label}): {len(remote)}/{len(ranked)}"
+                      f"{'' if has_more else ' — all'} (l — more)")
+            return
         status = f" loading models {skip + 1}–{skip + LIMIT} from HF ({label})…"
         draw()
         stdscr.refresh()
@@ -208,8 +237,6 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                 right = f"{e['size']} on disk"
                 if e["ctx"]:
                     right += f" · ctx {e['ctx']}"
-                if e["lfsc"]:
-                    right = f"⚡{e['lfsc']['score']:.0f} · " + right
             else:
                 ram = f"~{e['rn']:.0f}GB" if e["rn"] is not None else "?GB"
                 moe = " · MoE" if e["active"] else ""
@@ -220,6 +247,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                     right += " · tools"
                 if e["rn"] is not None and e["rn"] > sys_ram:
                     right += " ⚠won't fit"
+            if e["lfsc"]:
+                right = f"⚡{e['lfsc']['score']:.0f} · " + right
             mark = "▸ " if i == cur_row else "  "
             rec = " ★" if e["id"] == recommended else ""
             name_w = max(10, w - len(mark) - len(right) - 3)
@@ -256,16 +285,11 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             add(h - 1, 0, status, DIM)
         stdscr.refresh()
 
-    status = " loading top MLX models from HuggingFace…"
+    status = " ranking MLX models for this machine…"
     draw()
-    try:
-        page = hf.fetch_page(0, LIMIT, cfg.hf_token)
-        skip = LIMIT
-        remote = list(page)
-        has_more = bool(page)
-        status = f" loaded from HF: {len(remote)} (l — more)"
-    except Exception as exc:
-        status = f" HF API unavailable: {exc} — showing installed only"
+    stdscr.refresh()
+    build_ranked()
+    load_more()   # the ranked catalog when available, HF pages otherwise
 
     while True:
         draw()
@@ -327,6 +351,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             scope = "all" if scope == "community" else "community"
             remote, skip, has_more = [], 0, True
             cursor = scroll_off = 0
+            build_ranked()
             load_more()
         elif ch == ord("/"):
             searching = True
