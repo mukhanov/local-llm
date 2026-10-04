@@ -9,15 +9,16 @@ $ local-llm
 ```
 
 ```
- model picker — RAM 64GB · Apple M2 Pro · sort: by fit (s — toggle)
+ model picker — RAM 128GB · Apple M5 Max · sort: by score (s — toggle)
 ── 💿 Installed ────────────────────────────────────────────────────────────────
-   mlx-community/Qwen3-1.7B-4bit                                     1.1G on disk
-   mlx-community/Llama-3.1-8B-Instruct-4bit                           4.6G on disk
-── ☁ HuggingFace · by fit ──────────────────────────────────────────────────────
-▸  mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit    ~19GB RAM · MoE · ↓34K · ⭐16
-   mlx-community/gpt-oss-20b-MXFP4-Q8                ~14GB RAM · ↓257K · ⭐96
-   mlx-community/Qwen3-235B-A22B-3bit                ~96GB RAM · MoE · ↓12K · ⭐58 ⚠won't fit
+   mlx-community/Qwen3.5-122B-A10B-4bit                    ⚡91 · 64.8G on disk · ctx 262K
+   mlx-community/GLM-4.5-Air-4bit                          ⚡79 · 49.3G on disk · ctx 131K
+── ☁ HuggingFace · mlx-community · by score ───────────────────────────────────
+▸  mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit   ⚡85 · ~19GB RAM · MoE · ↓34K · ⭐16
+   mlx-community/gpt-oss-20b-MXFP4-Q8                ⚡80 · ~14GB RAM · ↓257K · ⭐96
+   mlx-community/Qwen3-235B-A22B-3bit                ⚡67 · ~96GB RAM · MoE · ↓12K · ⭐58 ⚠won't fit
    ...
+ ⚡85.2 = quality 63 · speed 100 (103 tok/s) · fit 100 · ctx 100 · ~18GB of 128GB · chat
  j/k↑↓ PgUp/PgDn g/G · / search · l more · s sort · a all⇄community · d delete · Enter select · q cancel
 ```
 
@@ -29,13 +30,11 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
 ## Features
 
 - **Model picker (TUI)** — installed models first, then the HuggingFace top
-  with paging, search, and hardware-fit sorting: RAM estimate
-  per quantization (4/8-bit, MXFP4), MoE awareness, model-family quality
-  bonuses, download-count tiebreak. Models that won't fit your RAM are marked
-  `⚠won't fit`. Press `a` to switch the catalog between the curated
-  `mlx-community` org and **all MLX-format models** (any author — includes
-  fresh personal re-quants); `/`-search queries HuggingFace server-side, so
-  models beyond the loaded pages are findable too.
+  with paging, search, and score sorting (below). Models that won't fit your
+  RAM are marked `⚠won't fit`. Press `a` to switch the catalog between the
+  curated `mlx-community` org and **all MLX-format models** (any author —
+  includes fresh personal re-quants); `/`-search queries HuggingFace
+  server-side, so models beyond the loaded pages are findable too.
 - **Readable download progress** — a single status line with a progress bar,
   percent, speed, ETA and the current file (native huggingface_hub's three
   interleaved tqdm bars are disabled).
@@ -45,10 +44,15 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   catalogs and generates a Claude Code settings file.
 - **System monitor** — htop-style curses UI: per-core CPU + history graph,
   RAM/swap, server status, process RSS, recent errors from the logs.
-- **llmfit stats** — context length, tool-use capability and a RAM estimate
-  for exotic quantization names next to each model in the picker, sourced
-  from the [llmfit](https://github.com/AlexsJones/llmfit) model catalog
-  (MLX-format slice, cached for a week in `~/.ollmlx`,
+- **llmfit stats & score** — context length, tool-use capability and a RAM
+  estimate for exotic quantization names next to each model in the picker,
+  plus the **llmfit composite score** (a Python port of llmfit's fit
+  calculator, Apache-2.0): quality × speed × memory-fit × context, weighted
+  per use case and keyed to *your* chip's memory bandwidth — the picker's
+  default sort. The row under the cursor gets a one-line breakdown
+  (`⚡98.2 = quality 96 · speed 100 (53 tok/s) · …`), installed models
+  included. All sourced from the [llmfit](https://github.com/AlexsJones/llmfit)
+  model catalog (MLX-format slice, cached for a week in `~/.ollmlx`,
   works fully offline between refreshes).
 - **HF token support** — for gated models and API limits; stored outside the
   repo in `~/.ollmlx/hf-token` (chmod 600).
@@ -222,7 +226,7 @@ local_llm/
   picker.py        # curses model picker (TUI + plain fallback)
   models.py        # model-string parsing, RAM estimates, fit scoring
   hf.py            # HuggingFace API, downloads, cache management, DoH
-  llmfit.py        # llmfit catalog stats (context length, tools) for the picker
+  llmfit.py        # llmfit catalog stats + composite score port for the picker
   servers.py       # mlx_lm.server + litellm lifecycle
   clients.py       # pi / omp / Claude Code config writer
   monitor.py       # curses system monitor

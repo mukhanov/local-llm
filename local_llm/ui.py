@@ -53,6 +53,18 @@ def total_ram_gb() -> int:
 
 
 def gpu_name() -> str:
+    """Chip name for the header — the real one on Apple Silicon
+    (machdep.cpu.brand_string, e.g. "Apple M5 Max": llmfit scoring keys its
+    memory-bandwidth table off this string)."""
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True, text=True,
+        )
+        if out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
     return "Apple Silicon" if platform.machine() == "arm64" else "Intel/Other"
 
 
