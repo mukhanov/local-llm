@@ -358,11 +358,13 @@ def _dir_size(root: Path, hub_root: Path | None = None) -> int:
 
 
 def scan_installed(hf_hub: Path):
-    """[(org/repo, human_size)] — LLMs only: safetensors + tokenizer.
+    """[(org/repo, human_size, downloading)] — LLMs only: safetensors +
+    tokenizer.
 
-    safetensors links are checked for resolution: partially downloaded models
-    have broken shard links (missing targets) — the size stays honest, with
-    a ⚠ note."""
+    A model counts as downloading when shards have unresolved links
+    (interrupted) or blobs/ still holds *.incomplete files (an active
+    download in another process writes those). The size stays honest —
+    bytes on disk so far, with a ⚠ note for missing shards."""
     out = []
     if not hf_hub.is_dir():
         return out
@@ -391,7 +393,8 @@ def scan_installed(hf_hub: Path):
         sz = ui.human_bytes(size) if size else "?"
         if n_st > n_st_ok:
             sz += f" ⚠{n_st - n_st_ok} missing"
-        out.append(("/".join(parts), sz))
+        dling = n_st > n_st_ok or bool(list((d / "blobs").glob("*.incomplete")))
+        out.append(("/".join(parts), sz, dling))
     return out
 
 

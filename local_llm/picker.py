@@ -6,6 +6,7 @@ Entry points:
   pick_plain(cfg, ...) -> str | None
 """
 import curses
+import re
 import sys
 
 from . import hf, llmfit, models, ui
@@ -51,8 +52,8 @@ def pick_tui(cfg, sys_ram: int, recommended: str, lf: dict | None) -> str | None
 
 def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
          result: dict) -> None:
-    installed = hf.scan_installed(cfg.hf_hub)
-    inst_ids = {rid for rid, _ in installed}
+    installed = hf.scan_installed(cfg.hf_hub)   # (rid, size, downloading)
+    inst_ids = {t[0] for t in installed}
     remote, skip, has_more = [], 0, True
     ranked: list[tuple[float, str, int, int]] = []   # (score, repo, dl, likes)
     sort_mode, query, searching = "fit", "", False
@@ -76,13 +77,9 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         return curses.color_pair(n)
 
     def entries():
-        """Installed first, then remote entries in the current sort order."""
-        def lf_bits(repo):
-            e = (lf or {}).get(repo)
-            return (llmfit.ctx_str(e) if e else None,
-                    bool(e and llmfit.has_tools(e)),
-                    (e.get("recommended_ram_gb") if e else None),
-                    (llmfit.score(e, sys_ram) if e else None))
+        """ONE list ranked by score — downloaded and not-yet-downloaded
+        together, so the sort is honest (the real #1 sits on the first
+        row). Rows carry inst=True (✓, size on disk) for what's local."""
 
         def srt_key(e):
             # llmfit score when the catalog knows the model, the local
@@ -91,31 +88,36 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
 
         ents = []
         q = query.lower()
-        for rid, sz in installed:
+        for rid, sz, dling in installed:
             if q and q not in rid.lower():
                 continue
+            e = (lf or {}).get(rid)
             sc, rn, total, active = models.score(sys_ram, rid, 0)
-            ctx, tools, lf_ram, lfsc = lf_bits(rid)
-            rn = rn if rn is not None else lf_ram  # exotic quant names don't parse
-            ents.append(dict(id=rid, inst=True, size=sz, dl=0, likes=0, sc=sc,
-                             rn=rn, total=total, active=active, ctx=ctx,
-                             tools=tools, lfsc=lfsc))
-        if sort_mode == "fit":
-            ents.sort(key=srt_key)
-        rem = []
+            rn = rn if rn is not None else (  # exotic quant names don't parse
+                e.get("recommended_ram_gb") if e else None)
+            ents.append(dict(id=rid, inst=True, size=sz, dling=dling,
+                             dl=(e.get("hf_downloads") or 0) if e else 0,
+                             likes=(e.get("hf_likes") or 0) if e else 0,
+                             sc=sc, rn=rn, total=total, active=active,
+                             ctx=llmfit.ctx_str(e) if e else None,
+                             tools=bool(e and llmfit.has_tools(e)),
+                             lfsc=llmfit.score(e, sys_ram) if e else None))
         for m in remote:
             if m["id"] in inst_ids or (q and q not in m["id"].lower()):
                 continue
-            dl = m["downloads"]
-            sc, rn, total, active = models.score(sys_ram, m["id"], dl)
-            ctx, tools, lf_ram, lfsc = lf_bits(m["id"])
-            rn = rn if rn is not None else lf_ram
-            rem.append(dict(id=m["id"], inst=False, size="", dl=dl,
-                            likes=m["likes"], sc=sc, rn=rn, total=total,
-                            active=active, ctx=ctx, tools=tools, lfsc=lfsc))
-        rem.sort(key=srt_key if sort_mode == "fit"
-                 else lambda e: (-e["dl"], -e["sc"]))
-        return ents + rem
+            e = (lf or {}).get(m["id"])
+            sc, rn, total, active = models.score(sys_ram, m["id"], m["downloads"])
+            rn = rn if rn is not None else (
+                e.get("recommended_ram_gb") if e else None)
+            ents.append(dict(id=m["id"], inst=False, size="", dling=False,
+                             dl=m["downloads"],
+                             likes=m["likes"], sc=sc, rn=rn, total=total,
+                             active=active, ctx=llmfit.ctx_str(e) if e else None,
+                             tools=bool(e and llmfit.has_tools(e)),
+                             lfsc=llmfit.score(e, sys_ram) if e else None))
+        ents.sort(key=srt_key if sort_mode == "fit"
+                  else lambda e: (-e["dl"], -(e["lfsc"]["score"] if e["lfsc"] else e["sc"])))
+        return ents
 
     def build_ranked():
         """The scope's catalog models, best llmfit score for THIS machine
@@ -187,23 +189,17 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         nonlocal cursor, scroll_off
         ents = entries()
         cursor = max(0, min(cursor, len(ents) - 1)) if ents else 0
-        rows, cur_row, prev, ei = [], 0, None, 0
-        for e in ents:
-            kind = "inst" if e["inst"] else "remote"
-            if kind != prev:
-                src = "all MLX" if scope == "all" else "mlx-community"
-                how = "by score" if sort_mode == "fit" else "by downloads"
-                title = ("💿 Installed" if kind == "inst" else
-                         f"☁ HuggingFace · {src} · {how}")
-                rows.append(("hdr", title))
-                prev = kind
+        rows, cur_row = [], 0
+        if ents:
+            src = "all MLX" if scope == "all" else "mlx-community"
+            how = "by score" if sort_mode == "fit" else "by downloads"
+            rows.append(("hdr", f"✓ on disk · ⬇ downloading · {src} · {how}"))
+        else:
+            rows = [("hdr", "nothing found" if query else "list is empty")]
+        for ei, e in enumerate(ents):
             rows.append(("ent", e))
             if ei == cursor:
                 cur_row = len(rows) - 1
-            ei += 1
-        if not rows:
-            rows = [("hdr", "nothing found" if query else "list is empty")]
-            cur_row = 0
 
         h, w = stdscr.getmaxyx()
         stdscr.erase()
@@ -234,7 +230,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                 continue
             e = payload
             if e["inst"]:
-                right = f"{e['size']} on disk"
+                right = (f"{e['size']} so far" if e["dling"]
+                         else f"{e['size']} on disk")
                 if e["ctx"]:
                     right += f" · ctx {e['ctx']}"
             else:
@@ -249,13 +246,17 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                     right += " ⚠won't fit"
             if e["lfsc"]:
                 right = f"⚡{e['lfsc']['score']:.0f} · " + right
-            mark = "▸ " if i == cur_row else "  "
+            mark = ("▸ " if i == cur_row else "  ") + \
+                ("⬇ " if e["inst"] and e["dling"]
+                 else "✓ " if e["inst"] else "  ")
             rec = " ★" if e["id"] == recommended else ""
             name_w = max(10, w - len(mark) - len(right) - 3)
             nm = e["id"] if len(e["id"]) <= name_w else e["id"][:name_w - 1] + "…"
             pad = max(1, w - 1 - len(mark) - len(nm) - len(rec) - len(right))
             if i == cur_row:
                 attr = R | B
+            elif e["inst"] and e["dling"]:
+                attr = col(2)   # in flight: yellow, not green
             elif e["inst"]:
                 attr = col(1)
             elif e["rn"] is not None and e["rn"] > sys_ram:
@@ -265,12 +266,20 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             add(yy, 0, f"{mark}{nm}{rec}{' ' * pad}{right}", attr)
 
         # llmfit breakdown for the row under the cursor
-        if ents and ents[cursor]["lfsc"]:
-            d = ents[cursor]["lfsc"]
+        cur_e = ents[cursor] if ents else None
+        if cur_e and cur_e["lfsc"]:
+            d = cur_e["lfsc"]
+            extra = ""
+            if cur_e["dling"]:   # rough progress: bytes so far vs. weight estimate
+                m = re.match(r"([\d.]+)([GM])", cur_e["size"])
+                if m:
+                    gb = float(m.group(1)) / (1 if m.group(2) == "G" else 1024)
+                    if d["mem"] > 0:
+                        extra = f" · ⬇ ~{min(99, gb / d['mem'] * 100):.0f}%"
             add(h - 3, 0, f" ⚡{d['score']:.1f} = quality {d['quality']:.0f} ·"
                 f" speed {d['speed']:.0f} ({d['tps']:.0f} tok/s) ·"
                 f" fit {d['fit']:.0f} · ctx {d['context']:.0f} ·"
-                f" ~{d['mem']:.0f}GB of {sys_ram}GB · {d['use_case']}", DIM)
+                f" ~{d['mem']:.0f}GB of {sys_ram}GB · {d['use_case']}{extra}", DIM)
 
         if searching:
             hint = f" search: {query}█   Enter — apply (+HF) · Esc — clear"
@@ -304,7 +313,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                 except OSError as exc:
                     status = f" could not delete: {exc}"
                 installed = hf.scan_installed(cfg.hf_hub)
-                inst_ids = {rid for rid, _ in installed}
+                inst_ids = {t[0] for t in installed}
             else:
                 status = ""
             confirm = None
@@ -399,11 +408,13 @@ def pick_plain(cfg, sys_ram: int, recommended: str, lf: dict | None = None) -> s
     i = 1
     if installed:
         print("   💿 Installed models (start without downloading):\n")
-        for rid, size in installed:
+        for rid, size, dling in installed:
             mark = " ★ " if rid == recommended else "   "
             print(f"{mark}{i:2d}) {rid}")
             print(f"      {models.describe(rid)}")
-            print(f"      💾 {size} on disk | ~{models.ram_need_gb(rid)}GB RAM"
+            state = f"⬇ {size} so far (still downloading)" if dling \
+                else f"💾 {size} on disk"
+            print(f"      {state} | ~{models.ram_need_gb(rid)}GB RAM"
                   f"{lf_bits(rid)}")
             shown.append(rid)
             i += 1

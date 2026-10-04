@@ -150,14 +150,15 @@ def cmd_list(cfg: Config) -> int:
         ui.warn(f"No downloaded LLM models ({cfg.hf_hub})")
         return 0
     ui.info("💿 Installed models:")
-    for rid, size in installed:
-        print(f"  {rid:<62} {size}  ~{models.ram_need_gb(rid)}GB RAM")
+    for rid, size, dling in installed:
+        mark = "⬇ " if dling else "  "
+        print(f"  {mark}{rid:<62} {size}  ~{models.ram_need_gb(rid)}GB RAM")
     return 0
 
 
 def cmd_rm(cfg: Config, args: list[str]) -> int:
     installed = hf.scan_installed(cfg.hf_hub)
-    ids = [rid for rid, _ in installed]
+    ids = [t[0] for t in installed]
     if not installed:
         ui.warn(f"No downloaded LLM models ({cfg.hf_hub})")
         return 0
@@ -166,8 +167,9 @@ def cmd_rm(cfg: Config, args: list[str]) -> int:
         targets = list(args)
     else:
         ui.info("💿 Installed models:")
-        for n, (rid, size) in enumerate(installed, 1):
-            print(f"  {n:2d}) {rid:<62} {size}")
+        for n, (rid, size, dling) in enumerate(installed, 1):
+            mark = "⬇ " if dling else "  "
+            print(f"  {n:2d}) {mark}{rid:<60} {size}")
         try:
             raw = input("?# Delete (numbers or org/repo, space-separated,"
                         " empty — cancel): ").strip()
@@ -200,7 +202,7 @@ def cmd_rm(cfg: Config, args: list[str]) -> int:
         if not hf.model_dir(cfg.hf_hub, d).is_dir():
             ui.warn(f"{d} — not found in cache")
             continue
-        size = next((s for i, s in installed if i == d), "?")
+        size = next((s for i, s, _ in installed if i == d), "?")
         try:
             answer = input(f"?# Delete {d} ({size})? [y/N] ").strip()
         except EOFError:

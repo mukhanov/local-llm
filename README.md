@@ -10,15 +10,12 @@ $ local-llm
 
 ```
  model picker — RAM 128GB · Apple M5 Max · sort: by score (s — toggle)
-── 💿 Installed ────────────────────────────────────────────────────────────────
-▸  mlx-community/Qwen3.5-122B-A10B-4bit                    ⚡91 · 64.8G on disk · ctx 262K
-   mlx-community/GLM-4.5-Air-4bit                          ⚡79 · 49.3G on disk · ctx 131K
-── ☁ HuggingFace · mlx-community · by score ───────────────────────────────────
-   mlx-community/gemma-4-12B-it-qat-4bit             ⚡97 · ~8GB RAM · ↓24K · ⭐29 · ctx 262K
-   mlx-community/gemma-4-12b-coder-fable5-composer2.5-8bit  ⚡97 · ~15GB RAM · ↓2K · ⭐37 · ctx 262K
-   mlx-community/Llama-3.2-11B-Vision-Instruct-4bit  ⚡96 · ~8GB RAM · ↓1K · ⭐8 · ctx 131K · tools
-   ...
- ⚡91.1 = quality 86 · speed 92 (37 tok/s) · fit 100 · ctx 100 · ~70GB of 128GB · Multimodal
+── ✓ on disk · ⬇ downloading · mlx-community · by score ───────────────────────
+▸  ⬇ Litwein/Qwen3.8-Flash-Next-REAP320-oQ3e-DWQ-MTP-Vision-MLX ⚡98 · 14.0G so far · ctx 262K
+    mlx-community/gemma-4-12B-it-qat-4bit                   ⚡97 · ~8GB RAM · ↓24K · ⭐29 · ctx 262K
+   ✓ mlx-community/Qwen3.5-122B-A10B-4bit ★                 ⚡91 · 64.8G on disk · ctx 262K
+   ⬇ mlx-community/GLM-4.5-Air-4bit                         ⚡79 · 54.6G so far · ctx 131K
+ ⚡98.2 = quality 96 · speed 100 (53 tok/s) · fit 100 · ctx 100 · ~78GB of 128GB · Multimodal · ⬇ ~18%
  j/k↑↓ PgUp/PgDn g/G · / search · l more · s sort · a all⇄community · d delete · Enter select · q cancel
 ```
 
@@ -29,9 +26,11 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
 
 ## Features
 
-- **Model picker (TUI)** — installed models first, then the HuggingFace top
-  with paging, search, and score sorting (below). Models that won't fit your
-  RAM are marked `⚠won't fit`. Press `a` to switch the catalog between the
+- **Model picker (TUI)** — ONE list, honestly sorted by score: `✓` = on
+  disk (green, with size), `⬇` = still downloading in another session
+  (yellow, "N NG so far" — Enter resumes it; finished blobs are reused),
+  everything else is a download candidate. Models that won't fit your RAM
+  are marked `⚠won't fit`. Press `a` to switch the catalog between the
   curated `mlx-community` org and **all MLX-format models** (any author —
   includes fresh personal re-quants); `/`-search queries HuggingFace
   server-side, so models beyond the loaded pages are findable too.
