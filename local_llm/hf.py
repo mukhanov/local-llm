@@ -221,6 +221,11 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
 
     def worker():
         for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                # re-resolve: the pinned edge itself may be what died —
+                # CloudFront rotates answer order, so a fresh DoH query
+                # lands on a different IP
+                _pinned.clear()
             try:
                 # max_workers=2 (hub default is 8): TUN proxies choke on many
                 # parallel streams — the initial burst saturates, then every
