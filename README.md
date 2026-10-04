@@ -45,8 +45,10 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   on one port, model exposed under a stable alias `ollmlx/local`.
 - **Client config writer** — registers the model in `pi` and `omp` model
   catalogs and generates a Claude Code settings file.
-- **System monitor** — htop-style curses UI: per-core CPU + history graph,
-  RAM/swap, server status, process RSS, recent errors from the logs.
+- **System monitor** — htop-style curses UI: the model's live tokens/sec
+  (decode rate + a history graph, prefill rate while it reads your prompt),
+  per-core CPU + history graph, RAM/swap, server status, process RSS,
+  recent errors from the logs.
 - **llmfit stats & score** — context length, tool-use capability and a RAM
   estimate for exotic quantization names next to each model in the picker,
   plus the **llmfit composite score** (a Python port of llmfit's fit
@@ -164,10 +166,16 @@ $ curl http://127.0.0.1:4000/v1/messages \
 
 ### Monitor
 
-Shows CPU per core and a history graph, RAM/swap, port status, mlx/litellm
-process stats, the client launch commands and the latest errors from
-`/tmp/mlx-server.log` and `/tmp/litellm.log`. Press `q` (or Ctrl-C) to stop
-the whole stack.
+Shows the model's live **tokens/sec** (current decode rate and a history
+graph; the prompt-processing rate while it prefill-reads your prompt; a
+one-line summary of the last completion), then CPU per core with a history
+graph, RAM/swap, port status, mlx/litellm process stats, the client launch
+commands and the latest errors from `/tmp/mlx-server.log` and
+`/tmp/litellm.log`. Press `q` (or Ctrl-C) to stop the whole stack.
+
+The tok/s numbers come from a thin wrapper around `mlx_lm.server`
+(`local_llm.mlxwrap`): it counts generated tokens and logs `TOKPS` lines
+once a second — the monitor graphs them.
 
 ## Configuration
 
@@ -234,6 +242,7 @@ local_llm/
   hf.py            # HuggingFace API, downloads, cache management, DoH
   llmfit.py        # llmfit catalog stats + composite score port for the picker
   servers.py       # mlx_lm.server + litellm lifecycle
+  mlxwrap.py       # mlx_lm.server entry point + tok/s logging hook
   clients.py       # pi / omp / Claude Code config writer
   monitor.py       # curses system monitor
   config.py        # env-driven configuration

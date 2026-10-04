@@ -23,7 +23,9 @@ LITELLM_LOG = "/tmp/litellm.log"
 children: list[subprocess.Popen] = []
 
 
-_MLX_PATTERN = r"mlx_lm\.server"
+# our wrapper around mlx_lm.server (tok/s logging) or a raw server from an
+# older local-llm — `stop` must kill either
+_MLX_PATTERN = r"local_llm\.mlxwrap|mlx_lm\.server"
 
 
 def http_ok(url: str, timeout: float = 2.0) -> bool:
@@ -122,7 +124,7 @@ def start_mlx(cfg, model: str) -> None:
         env["HF_TOKEN"] = cfg.hf_token
     try:
         proc = subprocess.Popen(
-            [python, "-m", "mlx_lm.server",
+            [python, "-m", "local_llm.mlxwrap",   # mlx_lm.server + tok/s log
              "--model", model, "--host", "127.0.0.1",
              "--port", str(cfg.mlx_port),
              "--max-tokens", str(min(ctx, 32768)), *flags],
