@@ -77,9 +77,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         return curses.color_pair(n)
 
     def entries():
-        """ONE list ranked by score — downloaded and not-yet-downloaded
-        together, so the sort is honest (the real #1 sits on the first
-        row). Rows carry inst=True (✓, size on disk) for what's local."""
+        """Installed first (✓ ready and ⬇ still-downloading together), then
+        the remote candidates in the current sort order."""
 
         def srt_key(e):
             # llmfit score when the catalog knows the model, the local
@@ -102,6 +101,9 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                              ctx=llmfit.ctx_str(e) if e else None,
                              tools=bool(e and llmfit.has_tools(e)),
                              lfsc=llmfit.score(e, sys_ram) if e else None))
+        if sort_mode == "fit":
+            ents.sort(key=srt_key)
+        rem = []
         for m in remote:
             if m["id"] in inst_ids or (q and q not in m["id"].lower()):
                 continue
@@ -109,15 +111,15 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             sc, rn, total, active = models.score(sys_ram, m["id"], m["downloads"])
             rn = rn if rn is not None else (
                 e.get("recommended_ram_gb") if e else None)
-            ents.append(dict(id=m["id"], inst=False, size="", dling=False,
-                             dl=m["downloads"],
-                             likes=m["likes"], sc=sc, rn=rn, total=total,
-                             active=active, ctx=llmfit.ctx_str(e) if e else None,
-                             tools=bool(e and llmfit.has_tools(e)),
-                             lfsc=llmfit.score(e, sys_ram) if e else None))
-        ents.sort(key=srt_key if sort_mode == "fit"
-                  else lambda e: (-e["dl"], -(e["lfsc"]["score"] if e["lfsc"] else e["sc"])))
-        return ents
+            rem.append(dict(id=m["id"], inst=False, size="", dling=False,
+                            dl=m["downloads"],
+                            likes=m["likes"], sc=sc, rn=rn, total=total,
+                            active=active, ctx=llmfit.ctx_str(e) if e else None,
+                            tools=bool(e and llmfit.has_tools(e)),
+                            lfsc=llmfit.score(e, sys_ram) if e else None))
+        rem.sort(key=srt_key if sort_mode == "fit"
+                 else lambda e: (-e["dl"], -(e["lfsc"]["score"] if e["lfsc"] else e["sc"])))
+        return ents + rem
 
     def build_ranked():
         """The scope's catalog models, best llmfit score for THIS machine
@@ -189,17 +191,23 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         nonlocal cursor, scroll_off
         ents = entries()
         cursor = max(0, min(cursor, len(ents) - 1)) if ents else 0
-        rows, cur_row = [], 0
-        if ents:
-            src = "all MLX" if scope == "all" else "mlx-community"
-            how = "by score" if sort_mode == "fit" else "by downloads"
-            rows.append(("hdr", f"✓ on disk · ⬇ downloading · {src} · {how}"))
-        else:
-            rows = [("hdr", "nothing found" if query else "list is empty")]
-        for ei, e in enumerate(ents):
+        rows, cur_row, prev, ei = [], 0, None, 0
+        for e in ents:
+            kind = "inst" if e["inst"] else "remote"
+            if kind != prev:
+                src = "all MLX" if scope == "all" else "mlx-community"
+                how = "by score" if sort_mode == "fit" else "by downloads"
+                title = ("💿 Installed (✓ ready · ⬇ downloading)" if kind == "inst"
+                         else f"☁ HuggingFace · {src} · {how}")
+                rows.append(("hdr", title))
+                prev = kind
             rows.append(("ent", e))
             if ei == cursor:
                 cur_row = len(rows) - 1
+            ei += 1
+        if not rows:
+            rows = [("hdr", "nothing found" if query else "list is empty")]
+            cur_row = 0
 
         h, w = stdscr.getmaxyx()
         stdscr.erase()
