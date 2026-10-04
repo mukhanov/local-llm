@@ -232,9 +232,9 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
         y[0] += 1
         if tokps_h:
             gl, gr = 5, 6 + bw
-            title = f" tok/s 0–{scale:.0f} " if bw >= 20 else ""
+            title = f" tok/s 0–{scale:.0f} " if bw >= 15 else ""
             add(y[0], gl,
-                "┌" + title + "─" * max(0, gr - gl + 1 - 2 - len(title)),
+                "┌" + title + "─" * max(0, gr - gl + 1 - 2 - len(title)) + "┐",
                 curses.A_DIM)
             y[0] += 1
             data = list(tok_hist)[-bw:]
@@ -249,8 +249,9 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
             y[0] += tokps_h
             add(y[0], gl, "└" + "─" * (gr - gl - 1) + "┘", curses.A_DIM)
             y[0] += 1
-        add(y[0], 0, f" last: {tok['summary']}" if tok["summary"]
-            else " no completions yet — tok/s appears during generation",
+        # col 5: the summary sits under the graph frame's edge, not at 0
+        add(y[0], 5, f"last: {tok['summary']}" if tok["summary"]
+            else "no completions yet — tok/s appears during generation",
             curses.A_DIM)
         y[0] += 1
 
@@ -283,9 +284,11 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
         # --- cpu: per core, two columns in a shared frame ---
         if cores_h:
             put()
-            cw = max(6, (w - 26) // 2)
-            cl, cr = 0, 2 * cw + 23   # │ at 0, cores from 1, │ after the second column
-            title = " cores " if cr >= 12 else ""
+            # same frame edges as the graphs above (│ at 5 and 6+bw, under
+            # the '[' and ']' of the bars) so everything lines up
+            cl, cr = 5, 6 + bw
+            cw = max(6, (bw - 22) // 2)   # two "Cnn[bar] 100%" cells + gap
+            title = " cores " if cr - cl >= 12 else ""
             add(y[0], cl,
                 "┌" + title + "─" * max(0, cr - cl + 1 - 2 - len(title)) + "┐",
                 curses.A_DIM)
@@ -296,7 +299,7 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg) -> None:
                         continue
                     v = percpu[idx]
                     f = int(cw * v / 100 + 0.5)
-                    add(y[0], 1 + side * (cw + 12),
+                    add(y[0], 6 + side * (cw + 12),
                         f"C{idx:02d}[{'█' * f}{' ' * (cw - f)}]{v:4.0f}%",
                         curses.color_pair(heat(v)))
                 add(y[0], cl, "│", curses.A_DIM)
