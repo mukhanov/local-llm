@@ -6,6 +6,7 @@ exiting the monitor or Ctrl-C kills everything at once (see cli.run_stack ->
 finally)."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -97,6 +98,22 @@ def _wait_ready(url: str, proc, timeout: int, log: str,
     return waited
 
 
+def _server_flags(python: str) -> set[str]:
+    """Flags the installed mlx_lm.server actually accepts. The qwen4_exp PR
+    fork dropped --kv-bits/--kv-group-size (its linear-attention cache can't
+    be KV-quantized); passing them makes the server die on argparse."""
+    try:
+        out = subprocess.run([python, "-m", "mlx_lm.server", "--help"],
+                             capture_output=True, text=True,
+                             timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()  # can't ask -> pass nothing optional
+    # the usage block is ANSI-colored (flag names wrapped in escapes)
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    return {w for line in plain.splitlines() for w in line.split()
+            if w.startswith("--")}
+
+
 def start_mlx(cfg, model: str) -> None:
     ui.info(f"Starting mlx_lm.server on :{cfg.mlx_port}")
     _pkill(_MLX_PATTERN)
@@ -106,11 +123,16 @@ def start_mlx(cfg, model: str) -> None:
     python = (str(cfg.venv_python) if cfg.venv_python.exists()
               else sys.executable)
     ctx = hf.model_ctx(cfg.hf_hub, model)
+    supported = _server_flags(python)
     flags = []
     if cfg.kv_bits > 0:
-        flags += ["--kv-bits", str(cfg.kv_bits),
-                  "--kv-group-size", str(cfg.kv_group_size)]
-    if cfg.prompt_cache_bytes > 0:
+        if {"--kv-bits", "--kv-group-size"} <= supported:
+            flags += ["--kv-bits", str(cfg.kv_bits),
+                      "--kv-group-size", str(cfg.kv_group_size)]
+        else:
+            ui.warn("KV-cache quantization not supported by this "
+                    "mlx_lm.server — running without it")
+    if cfg.prompt_cache_bytes > 0 and "--prompt-cache-bytes" in supported:
         flags += ["--prompt-cache-bytes", str(cfg.prompt_cache_bytes)]
     log = open(MLX_LOG, "wb")
     env = dict(os.environ)
