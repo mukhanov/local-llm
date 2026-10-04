@@ -195,9 +195,10 @@ shared with another downloaded model.
   same machine may still fail — that's expected.
 - **Server didn't start** — check `/tmp/mlx-server.log` and `/tmp/litellm.log`;
   `local-llm stop` cleans up leftover processes.
-- **Interrupted download** — huggingface_hub 1.x does not resume across runs;
-  stale `.incomplete` leftovers are pruned automatically on the next attempt,
-  and partials are re-downloaded.
+- **Interrupted download** — huggingface_hub 1.x does not resume partial files
+  across runs. local-llm detects an incomplete model before starting the stack
+  (finished blobs are reused, stale `.incomplete` leftovers pruned, the rest
+  re-downloaded), so a half-downloaded model never silently "serves".
 - **Wrong model picked by the fit score** — press `s` to sort by downloads, or
   `/` to search, or just pass the full `org/repo` on the command line.
 

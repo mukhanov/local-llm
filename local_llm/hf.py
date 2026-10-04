@@ -67,9 +67,8 @@ def fetch_page(skip: int = 0, limit: int = 50, token: str | None = None):
     ]
 
 
-def _repo_file_meta(repo: str, token: str | None):
-    """(total repo size in bytes, {sha256-blob: file name}, file count) from
-    the HF API. On failure — (0, {}, 0): progress shows without percentages."""
+def _repo_siblings(repo: str, token: str | None):
+    """Repo file list from the HF API (?blobs=true), or None if unreachable."""
     install_doh()
     req = urllib.request.Request(
         f"https://huggingface.co/api/models/{repo}?blobs=true",
@@ -78,12 +77,17 @@ def _repo_file_meta(repo: str, token: str | None):
         req.add_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.loads(r.read().decode())
+            return json.loads(r.read().decode()).get("siblings", [])
     except Exception:
-        return 0, {}, 0
+        return None
+
+
+def _repo_file_meta(repo: str, token: str | None):
+    """(total repo size in bytes, {sha256-blob: file name}, file count) from
+    the HF API. On failure — (0, {}, 0): progress shows without percentages."""
+    siblings = _repo_siblings(repo, token) or []
     total = 0
     by_blob = {}
-    siblings = data.get("siblings", [])
     for s in siblings:
         if s.get("size"):
             total += s["size"]
@@ -92,6 +96,27 @@ def _repo_file_meta(repo: str, token: str | None):
         if oid:
             by_blob[oid] = s.get("rfilename", "?")
     return total, by_blob, len(siblings)
+
+
+def missing_files(hf_hub: Path, repo: str, token: str | None):
+    """Repo files the local snapshot lacks, or None if the HF API is
+    unreachable (completeness can't be verified).
+
+    A partial download passes is_cached(): hub creates snapshot links only
+    for finished files, so absent shards are invisible without the repo's
+    file list. Broken links count as missing (is_file() doesn't follow them)."""
+    siblings = _repo_siblings(repo, token)
+    if siblings is None:
+        return None
+    have = set()
+    for snap in (model_dir(hf_hub, repo) / "snapshots").glob("*"):
+        if not snap.is_dir():
+            continue
+        for f in snap.rglob("*"):
+            if f.is_file():
+                have.add(str(f.relative_to(snap)))
+    return [s.get("rfilename") for s in siblings
+            if s.get("rfilename") and s["rfilename"] not in have]
 
 
 def _scan_download(model_dir: Path):

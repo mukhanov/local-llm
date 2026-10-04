@@ -111,13 +111,22 @@ def start_mlx(cfg, model: str) -> None:
     if cfg.prompt_cache_bytes > 0:
         flags += ["--prompt-cache-bytes", str(cfg.prompt_cache_bytes)]
     log = open(MLX_LOG, "wb")
+    env = dict(os.environ)
+    # By the time we start mlx, the cache is complete (cli verified it against
+    # the repo file list). Force offline: otherwise a partial cache would make
+    # mlx start its own background download — plain DNS (no DoH pin), xet, no
+    # token — which stalls for hours while /v1/models already answers 200.
+    env["HF_HUB_OFFLINE"] = "1"
+    env["HF_HUB_DISABLE_XET"] = "1"
+    if cfg.hf_token:
+        env["HF_TOKEN"] = cfg.hf_token
     try:
         proc = subprocess.Popen(
             [python, "-m", "mlx_lm.server",
              "--model", model, "--host", "127.0.0.1",
              "--port", str(cfg.mlx_port),
              "--max-tokens", str(min(ctx, 32768)), *flags],
-            stdout=log, stderr=subprocess.STDOUT)
+            stdout=log, stderr=subprocess.STDOUT, env=env)
     finally:
         log.close()
     children.append(proc)
@@ -175,7 +184,11 @@ def start_litellm(cfg, model: str) -> None:
 
 
 def warmup(cfg) -> None:
-    """End-to-end warmup: litellm (via the `local` alias, like the clients) -> mlx."""
+    """End-to-end warmup: litellm (via the `local` alias, like the clients) -> mlx.
+
+    Fatal on failure: /v1/models answers 200 before the weights are loaded,
+    so this is the only real readiness gate — a stack that fails here would
+    only serve errors (cli's finally still stops the servers)."""
     ui.info("Warmup request")
     req = urllib.request.Request(
         f"http://127.0.0.1:{cfg.litellm_port}/v1/chat/completions",
@@ -186,8 +199,14 @@ def warmup(cfg) -> None:
                  "content-type": "application/json"},
         method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
+        with urllib.request.urlopen(req, timeout=max(300, cfg.load_timeout)) as r:
             r.read()
         ui.ok("e2e OK")
     except (OSError, urllib.error.URLError) as exc:
-        ui.warn(f"warmup failed ({exc}) — see {LITELLM_LOG} and {MLX_LOG}")
+        ui.warn(f"warmup failed ({exc})")
+        for path in (MLX_LOG, LITELLM_LOG):
+            lines = tail(path, 15)
+            if lines:
+                print(f"--- last lines of {path} ---")
+                print("\n".join(lines))
+        raise SystemExit(1) from None

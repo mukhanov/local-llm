@@ -69,12 +69,30 @@ def main(argv: list[str] | None = None) -> int:
 def run_stack(cfg: Config, model: str) -> int:
     servers.ensure_litellm()
     ui.info(f"Model: {model}")
-    if hf.is_cached(cfg.hf_hub, model):
-        ui.ok("already downloaded")
-    else:
-        ui.info("Downloading (via DoH-pinned DNS)")
+    missing = hf.missing_files(cfg.hf_hub, model, cfg.hf_token)
+    if missing is None:
+        # HF API unreachable: can't verify completeness, trust the local
+        # snapshot (all links resolve = best we can tell without the network)
+        if hf.is_cached(cfg.hf_hub, model):
+            ui.ok("already downloaded (completeness not verified —"
+                  " HF API unreachable)")
+        else:
+            ui.info("Downloading (via DoH-pinned DNS)")
+            hf.download(model, cfg.hf_token, cfg.hf_hub)
+            ui.ok("download complete")
+    elif missing:
+        # partial model: some shards done, hub reuses finished blobs and
+        # fetches only the rest
+        ui.warn(f"incomplete download: {len(missing)} file(s) missing"
+                f" (first: {missing[0]}) — fetching the rest")
         hf.download(model, cfg.hf_token, cfg.hf_hub)
+        missing = hf.missing_files(cfg.hf_hub, model, cfg.hf_token)
+        if missing:
+            raise SystemExit(f"   still incomplete after download:"
+                             f" {len(missing)} file(s) missing, e.g. {missing[0]}")
         ui.ok("download complete")
+    else:
+        ui.ok("already downloaded")
     try:
         servers.start_mlx(cfg, model)
         servers.start_litellm(cfg, model)
