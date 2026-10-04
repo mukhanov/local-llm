@@ -14,11 +14,34 @@ Line formats (kept short and stable — the monitor parses them):
   TOKPS done 512 tok · decode 48.9 tok/s (10.5s) · prompt 8231 tok, 5179 cached
                                per-request summary when the stream ends
 """
+import importlib
+import importlib.util
 import sys
 import threading
 import time
+from pathlib import Path
 
 import mlx_lm.server as mlxs
+
+# Model types that shipped ahead of mlx_lm releases (e.g. qwen4_exp from the
+# mlx-lm PR #1788 port, plus our loader fixes for the oMLX oQ layout). The
+# file name is the model_type; registration only kicks in when the installed
+# mlx_lm doesn't have the module itself — a later release wins automatically.
+_VENDOR_DIR = Path(__file__).parent / "vendor"
+
+
+def _vendor_models() -> None:
+    for path in sorted(_VENDOR_DIR.glob("*.py")):
+        name = f"mlx_lm.models.{path.stem}"
+        try:
+            importlib.import_module(name)
+            continue  # the installed mlx_lm has it
+        except ImportError:
+            pass
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod  # importlib checks sys.modules first
+        spec.loader.exec_module(mod)
 
 EMIT_EVERY = 1.0   # seconds between live lines
 IDLE_RESET = 5.0   # a longer gap since the last token starts a fresh window
@@ -109,6 +132,10 @@ def _install_hook() -> None:
 
 
 def main() -> None:
+    try:
+        _vendor_models()
+    except Exception as exc:  # vendoring must not kill the server either
+        print(f"model vendoring failed: {exc}", file=sys.stderr, flush=True)
     try:
         _install_hook()
     except Exception as exc:  # never let stats kill the server
