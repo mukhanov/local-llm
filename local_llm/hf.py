@@ -174,15 +174,19 @@ def _prune_partials(model_dir: Path) -> int:
 
 
 def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
-             poll: float = 1.0) -> None:
+             poll: float = 1.0, attempts: int = 5) -> None:
     """snapshot_download with DoH pinning, without xet/hf_transfer, with our
-    own progress display.
+    own progress display and flaky-network retries.
 
     huggingface_hub's native tqdm bars ("Downloading bytes", "Reconstructing",
     "Fetching N files") are disabled: instead there's a single line with a
     bar, speed, ETA and the current file (bytes are measured in the blobs
     dir, expected size comes from the HF API). The token goes into the
-    HF_TOKEN env — huggingface_hub picks it up itself."""
+    HF_TOKEN env — huggingface_hub picks it up itself.
+
+    On failure the whole snapshot_download is retried up to `attempts` times:
+    hub instantly re-verifies finished blobs and re-fetches only the missing
+    files, so a proxy that dies every few GB still converges."""
     install_doh()
     if token:
         os.environ["HF_TOKEN"] = token
@@ -213,21 +217,30 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
     is_tty = sys.stdout.isatty()
     term_w = shutil.get_terminal_size((100, 20)).columns
 
-    state = {"error": None}
+    state = {"error": None, "attempt": 0}
 
     def worker():
-        try:
-            snapshot_download(repo_id=repo)
-        except BaseException as exc:  # noqa: BLE001 — re-raised in the main thread
-            state["error"] = exc
+        for attempt in range(1, attempts + 1):
+            try:
+                snapshot_download(repo_id=repo)
+                state["error"] = None
+                return
+            except BaseException as exc:  # noqa: BLE001 — re-raised in the main thread
+                state["error"], state["attempt"] = exc, attempt
+                if attempt < attempts:
+                    time.sleep(min(60, 10 * attempt))
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
 
-    last_done, last_t, rate, ticks = 0, time.monotonic(), 0.0, 0
+    last_done, last_t, rate, ticks, last_attempt = 0, time.monotonic(), 0.0, 0, 0
     try:
         while thread.is_alive():
             time.sleep(poll)
+            if state["attempt"] > last_attempt:
+                last_attempt = state["attempt"]
+                print(f"\n   attempt {state['attempt']}/{attempts}"
+                      f" after: {state['error']}", flush=True)
             done, cur_blob, files_done = _scan_download(model_dir)
             now = time.monotonic()
             inst = (done - last_done) / max(1e-9, now - last_t)
@@ -265,7 +278,8 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
         raise
 
     if state["error"] is not None:
-        raise SystemExit(f"   download failed: {state['error']}")
+        raise SystemExit(f"   download failed after"
+                         f" {max(state['attempt'], 1)} attempt(s): {state['error']}")
     if is_tty:
         print("\r" + " " * (term_w - 1) + "\r", end="", flush=True)
 
