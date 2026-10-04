@@ -222,7 +222,10 @@ def download(repo: str, token: str | None = None, hf_hub: Path | None = None,
     def worker():
         for attempt in range(1, attempts + 1):
             try:
-                snapshot_download(repo_id=repo)
+                # max_workers=2 (hub default is 8): TUN proxies choke on many
+                # parallel streams — the initial burst saturates, then every
+                # connection times out
+                snapshot_download(repo_id=repo, max_workers=2)
                 state["error"] = None
                 return
             except BaseException as exc:  # noqa: BLE001 — re-raised in the main thread
