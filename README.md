@@ -31,7 +31,9 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
 - **Model picker (TUI)** — installed models first: `✓` ready (green, size
   on disk) and `⬇` still downloading in another session (yellow, "N NG
   so far" — Enter resumes it; finished blobs are reused), then the
-  catalog candidates ranked by score. Models that won't fit your RAM are
+  catalog candidates ranked by score. `d` on an installed row deletes
+  it from disk (y/n confirm; frees the shared cache blobs). Models that
+  won't fit your RAM are
   marked `⚠won't fit`. Press `a` to switch between the curated
   `mlx-community` org and **all MLX-format models** (any author —
   includes fresh personal re-quants); `/`-search queries HuggingFace

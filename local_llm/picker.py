@@ -284,6 +284,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                     gb = float(m.group(1)) / (1 if m.group(2) == "G" else 1024)
                     if d["mem"] > 0:
                         extra = f" · ⬇ ~{min(99, gb / d['mem'] * 100):.0f}%"
+            if cur_e["inst"]:
+                extra += " · d — delete"
             add(h - 3, 0, f" ⚡{d['score']:.1f} = quality {d['quality']:.0f} ·"
                 f" speed {d['speed']:.0f} ({d['tps']:.0f} tok/s) ·"
                 f" fit {d['fit']:.0f} · ctx {d['context']:.0f} ·"
@@ -296,8 +298,9 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                     " a all⇄community · d delete · Enter select · q cancel")
         add(h - 2, 0, hint, DIM)
         if confirm is not None:
-            add(h - 1, 0, f" delete {confirm['id']} ({confirm['size']}) from disk? y/n",
-                B | col(3))
+            warn = " — still downloading elsewhere!" if confirm["dling"] else ""
+            add(h - 1, 0, f" delete {confirm['id']} ({confirm['size']}){warn}"
+                          f" from disk? y/n", B | col(3))
         elif status:
             add(h - 1, 0, status, DIM)
         stdscr.refresh()
@@ -375,6 +378,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         elif ch == ord("d"):
             if ents and ents[cursor]["inst"]:
                 confirm = ents[cursor]
+            else:
+                status = " d deletes installed models — this one isn't downloaded"
 
 
 # --- plain-text fallback ---------------------------------------------------------
