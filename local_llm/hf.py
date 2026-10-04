@@ -5,6 +5,7 @@ import os
 import shutil
 import socket
 import stat
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -47,24 +48,35 @@ def install_doh() -> None:
         _installed = True
 
 
-def fetch_page(skip: int = 0, limit: int = 50, token: str | None = None):
-    """Top of mlx-community from HF, text-generation only (LLMs)."""
+def fetch_page(skip: int = 0, limit: int = 50, token: str | None = None,
+               scope: str = "community", search: str | None = None):
+    """A page of MLX LLMs from HF sorted by downloads (up to 2*limit models:
+    text-generation and image-text-to-text are disjoint tags, fetched
+    separately and merged; an empty page means exhausted).
+
+    scope "community" — the mlx-community org (canonical conversions);
+    scope "all" — every author via filter=mlx, includes fresh personal
+    re-quants. `search` runs the term server-side (matches repo names)."""
     install_doh()
-    url = (
-        f"https://huggingface.co/api/models?author=mlx-community"
-        f"&sort=downloads&direction=-1&limit={limit}&skip={skip}"
-    )
-    req = urllib.request.Request(url, headers={"accept": "application/json"})
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=20) as r:
-        models = json.loads(r.read().decode())
-    return [
-        {"id": m.get("id", ""), "downloads": m.get("downloads", 0),
-         "likes": m.get("likes", 0)}
-        for m in models
-        if m.get("pipeline_tag") == "text-generation" and m.get("id")
-    ]
+    out = []
+    for tag in ("text-generation", "image-text-to-text"):
+        if scope == "community":
+            url = (f"https://huggingface.co/api/models?author=mlx-community"
+                   f"&pipeline_tag={tag}")
+        else:
+            url = f"https://huggingface.co/api/models?filter=mlx,{tag}"
+        url += f"&sort=downloads&direction=-1&limit={limit}&skip={skip}"
+        if search:
+            url += f"&search={urllib.parse.quote(search)}"
+        req = urllib.request.Request(url, headers={"accept": "application/json"})
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            models = json.loads(r.read().decode())
+        out += [{"id": m.get("id", ""), "downloads": m.get("downloads", 0),
+                 "likes": m.get("likes", 0)} for m in models if m.get("id")]
+    out.sort(key=lambda m: -m["downloads"])
+    return out
 
 
 def _repo_siblings(repo: str, token: str | None):

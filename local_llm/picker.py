@@ -55,6 +55,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
     inst_ids = {rid for rid, _ in installed}
     remote, skip, has_more = [], 0, True
     sort_mode, query, searching = "fit", "", False
+    scope = "community"   # "community": mlx-community org | "all": any author
     cursor = scroll_off = 0
     status, confirm = "", None
 
@@ -78,7 +79,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         def lf_bits(repo):
             e = (lf or {}).get(repo)
             return (llmfit.ctx_str(e) if e else None,
-                    bool(e and llmfit.has_tools(e)))
+                    bool(e and llmfit.has_tools(e)),
+                    (e.get("recommended_ram_gb") if e else None))
 
         ents = []
         q = query.lower()
@@ -86,7 +88,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             if q and q not in rid.lower():
                 continue
             sc, rn, total, active = models.score(sys_ram, rid, 0)
-            ctx, tools = lf_bits(rid)
+            ctx, tools, lf_ram = lf_bits(rid)
+            rn = rn if rn is not None else lf_ram  # exotic quant names don't parse
             ents.append(dict(id=rid, inst=True, size=sz, dl=0, likes=0, sc=sc,
                              rn=rn, total=total, active=active, ctx=ctx,
                              tools=tools))
@@ -96,7 +99,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                 continue
             dl = m["downloads"]
             sc, rn, total, active = models.score(sys_ram, m["id"], dl)
-            ctx, tools = lf_bits(m["id"])
+            ctx, tools, lf_ram = lf_bits(m["id"])
+            rn = rn if rn is not None else lf_ram
             rem.append(dict(id=m["id"], inst=False, size="", dl=dl,
                             likes=m["likes"], sc=sc, rn=rn, total=total,
                             active=active, ctx=ctx, tools=tools))
@@ -109,19 +113,38 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         if not has_more:
             status = " HF: all pages loaded"
             return
-        status = f" loading models {skip + 1}–{skip + LIMIT} from HF…"
+        label = "all MLX" if scope == "all" else "mlx-community"
+        status = f" loading models {skip + 1}–{skip + LIMIT} from HF ({label})…"
         draw()
         stdscr.refresh()
         try:
-            page = hf.fetch_page(skip, LIMIT, cfg.hf_token)
+            page = hf.fetch_page(skip, LIMIT, cfg.hf_token, scope)
         except Exception as exc:
             status = f" HF API unavailable: {exc}"
             return
-        skip += len(page)
+        skip += LIMIT
         known = {m["id"] for m in remote}
         remote += [m for m in page if m["id"] not in known]
-        has_more = len(page) == LIMIT
-        status = f" loaded from HF: {len(remote)} (l — more)"
+        has_more = bool(page)
+        status = (f" loaded from HF ({label}): {len(remote)}"
+                  f"{'' if has_more else ' — all pages'} (l — more)")
+
+    def run_search():
+        """Fetch the search term server-side: local / filters only what's
+        already loaded, but a fresh re-quant may not be on any page yet."""
+        nonlocal remote, status
+        status = f" searching HF for “{query}”…"
+        draw()
+        stdscr.refresh()
+        try:
+            found = hf.fetch_page(0, LIMIT, cfg.hf_token, scope, query)
+        except Exception as exc:
+            status = f" HF search failed: {exc}"
+            return
+        known = {m["id"] for m in remote}
+        fresh = [m for m in found if m["id"] not in known]
+        remote += fresh
+        status = f" HF search: +{len(fresh)} model(s)"
 
     def draw():
         nonlocal cursor, scroll_off
@@ -131,9 +154,10 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         for e in ents:
             kind = "inst" if e["inst"] else "remote"
             if kind != prev:
+                src = "all MLX" if scope == "all" else "mlx-community"
+                how = "by fit" if sort_mode == "fit" else "by downloads"
                 title = ("💿 Installed" if kind == "inst" else
-                         ("☁ HuggingFace · by fit" if sort_mode == "fit"
-                          else "☁ HuggingFace · by downloads"))
+                         f"☁ HuggingFace · {src} · {how}")
                 rows.append(("hdr", title))
                 prev = kind
             rows.append(("ent", e))
@@ -202,10 +226,10 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             add(yy, 0, f"{mark}{nm}{rec}{' ' * pad}{right}", attr)
 
         if searching:
-            hint = f" search: {query}█   Enter — apply · Esc — clear"
+            hint = f" search: {query}█   Enter — apply (+HF) · Esc — clear"
         else:
-            hint = (" j/k↑↓ PgUp/PgDn g/G · / search · l more from HF · s sort ·"
-                    " d delete · Enter select · q cancel")
+            hint = (" j/k↑↓ PgUp/PgDn g/G · / search · l more · s sort ·"
+                    " a all⇄community · d delete · Enter select · q cancel")
         add(h - 2, 0, hint, DIM)
         if confirm is not None:
             add(h - 1, 0, f" delete {confirm['id']} ({confirm['size']}) from disk? y/n",
@@ -218,9 +242,9 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
     draw()
     try:
         page = hf.fetch_page(0, LIMIT, cfg.hf_token)
-        skip = len(page)
+        skip = LIMIT
         remote = list(page)
-        has_more = len(page) == LIMIT
+        has_more = bool(page)
         status = f" loaded from HF: {len(remote)} (l — more)"
     except Exception as exc:
         status = f" HF API unavailable: {exc} — showing installed only"
@@ -243,8 +267,13 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                 status = ""
             confirm = None
         elif searching:
-            if ch in (27, 10, 13, curses.KEY_ENTER):
+            if ch in (10, 13, curses.KEY_ENTER):
                 searching = False
+                cursor = scroll_off = 0
+                if query:
+                    run_search()   # local filter + HF query in one Enter
+            elif ch == 27:
+                searching, query = False, ""   # Esc clears the filter too
             elif ch in (curses.KEY_BACKSPACE, 127, 8):
                 query = query[:-1]
             elif 32 <= ch < 127:
@@ -276,6 +305,11 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         elif ch == ord("s"):
             sort_mode = "dl" if sort_mode == "fit" else "fit"
             cursor = scroll_off = 0
+        elif ch in (ord("a"), ord("A")):
+            scope = "all" if scope == "community" else "community"
+            remote, skip, has_more = [], 0, True
+            cursor = scroll_off = 0
+            load_more()
         elif ch == ord("/"):
             searching = True
         elif ch == ord("d"):

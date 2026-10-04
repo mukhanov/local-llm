@@ -18,7 +18,7 @@ $ local-llm
    mlx-community/gpt-oss-20b-MXFP4-Q8                ~14GB RAM · ↓257K · ⭐96
    mlx-community/Qwen3-235B-A22B-3bit                ~96GB RAM · MoE · ↓12K · ⭐58 ⚠won't fit
    ...
- j/k↑↓ PgUp/PgDn g/G · / search · l more from HF · s sort · d delete · Enter select · q cancel
+ j/k↑↓ PgUp/PgDn g/G · / search · l more · s sort · a all⇄community · d delete · Enter select · q cancel
 ```
 
 Behind the scenes it starts **mlx_lm.server** (OpenAI API on `:8080`) and a
@@ -28,11 +28,14 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
 
 ## Features
 
-- **Model picker (TUI)** — installed models first, then the mlx-community top
-  from HuggingFace with paging, search, and hardware-fit sorting: RAM estimate
+- **Model picker (TUI)** — installed models first, then the HuggingFace top
+  with paging, search, and hardware-fit sorting: RAM estimate
   per quantization (4/8-bit, MXFP4), MoE awareness, model-family quality
   bonuses, download-count tiebreak. Models that won't fit your RAM are marked
-  `⚠won't fit`.
+  `⚠won't fit`. Press `a` to switch the catalog between the curated
+  `mlx-community` org and **all MLX-format models** (any author — includes
+  fresh personal re-quants); `/`-search queries HuggingFace server-side, so
+  models beyond the loaded pages are findable too.
 - **Readable download progress** — a single status line with a progress bar,
   percent, speed, ETA and the current file (native huggingface_hub's three
   interleaved tqdm bars are disabled).
@@ -42,9 +45,10 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   catalogs and generates a Claude Code settings file.
 - **System monitor** — htop-style curses UI: per-core CPU + history graph,
   RAM/swap, server status, process RSS, recent errors from the logs.
-- **llmfit stats** — context length and tool-use capability next to each
-  model in the picker, sourced from the [llmfit](https://github.com/AlexsJones/llmfit)
-  model catalog (mlx-community slice, cached for a week in `~/.ollmlx`,
+- **llmfit stats** — context length, tool-use capability and a RAM estimate
+  for exotic quantization names next to each model in the picker, sourced
+  from the [llmfit](https://github.com/AlexsJones/llmfit) model catalog
+  (MLX-format slice, cached for a week in `~/.ollmlx`,
   works fully offline between refreshes).
 - **HF token support** — for gated models and API limits; stored outside the
   repo in `~/.ollmlx/hf-token` (chmod 600).
@@ -140,9 +144,10 @@ $ curl http://127.0.0.1:4000/v1/messages \
 | `j/k` `↑/↓`    | move (past the end — load more from HF) |
 | `PgUp/PgDn` `space` | page                                |
 | `g` / `G`      | top / bottom                            |
-| `/`            | search                                  |
+| `/`            | search (Enter also queries HF server-side) |
 | `l`            | load next page from HuggingFace         |
 | `s`            | sort: hardware fit ⇄ downloads          |
+| `a`            | catalog: `mlx-community` ⇄ all MLX models |
 | `d`            | delete selected installed model         |
 | `Enter`        | select and run                          |
 | `q` `Esc`      | cancel                                  |
