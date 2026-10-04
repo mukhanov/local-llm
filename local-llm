@@ -1,0 +1,23 @@
+#!/bin/zsh
+# local-llm — launcher: поднимает ~/.ollmlx/venv и исполняет python-пакет
+# local_llm (см. ../local_llm/). Вся логика — там.
+set -e
+APP_DIR="${0:A:h}"
+VENV="$HOME/.ollmlx/venv"
+
+if [[ ! -x "$VENV/bin/python" ]]; then
+  command -v uv >/dev/null || { echo "uv is required: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
+  uv venv "$VENV"
+  uv pip install --python "$VENV/bin/python" mlx-lm huggingface-hub psutil
+fi
+# psutil нужен монитору; доустанавливаем в существующий venv
+"$VENV/bin/python" -c 'import psutil' 2>/dev/null || \
+  uv pip install --python "$VENV/bin/python" psutil
+
+# huggingface_hub>=1.x зовут CLI `hf`; старые вызывающие (ollmlx) ждут huggingface-cli
+if [[ ! -x "$VENV/bin/huggingface-cli" || -L "$VENV/bin/huggingface-cli" ]]; then
+  printf '#!/bin/sh\nexec "$(dirname "$0")/hf" "$@"\n' > "$VENV/bin/huggingface-cli"
+  chmod +x "$VENV/bin/huggingface-cli"
+fi
+
+PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" exec "$VENV/bin/python" -m local_llm "$@"
