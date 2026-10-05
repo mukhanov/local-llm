@@ -191,11 +191,12 @@ last completion. Below them, in a grid: CPU with a history graph on the
 left and the per-core grid on the right, then the client launch commands
 on the left and mlx/litellm process stats on the right (each with its
 share of RAM, plus a ledger line: the stack's total vs the rest of the
-machine and what's still available), then a full-width box with the
-latest errors and log tails from `/tmp/mlx-server.log`,
-`/tmp/mlx-small.log` and `/tmp/litellm.log` — it grows to fill the space
-above the RAM/swap bars, which sit pinned to the bottom rows next to the
-`q` hint. Press `q` (or Ctrl-C) to stop the whole stack.
+machine and what's still available), then the RAM/swap bars — and at the
+very bottom a full-width box with the latest errors and log tails from
+`/tmp/mlx-server.log`, `/tmp/mlx-small.log` and `/tmp/litellm.log`; the
+box grows with the terminal and its tail hugs the bottom border. The two
+graphs and all boxes follow the same left/right column grid. Press `q`
+(or Ctrl-C) to stop the whole stack.
 
 The tok/s numbers come from a thin wrapper around `mlx_lm.server`
 (`local_llm.mlxwrap`): it counts generated tokens and logs `TOKPS` lines

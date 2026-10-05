@@ -275,6 +275,12 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         put(f" uptime {uptime()}   {chips}   cores {len(percpu)}")
         put()
 
+        # two-column grid the whole screen follows: left boxes span
+        # x=0 .. rx-1, right ones start at rx and stop at the screen edge
+        rx = w // 2 + 1
+        lw = rx - 1
+        rw = w - rx - 1
+
         # --- tok/s graphs: the big model and the helper side by side (a
         # single full-width graph when no helper runs). Each keeps its own
         # state, history and scale — 30 tok/s and 300 tok/s would flatten
@@ -282,9 +288,6 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         graphs = [(tok, tok_hist, "TOK/S main", LOGS[0][1])]
         if small_port:
             graphs.append((tok_s, tok_hist_s, "TOK/S small", MLX_SMALL_LOG))
-        gw = (w - 2) // 2 if len(graphs) > 1 else w
-        # the graphs take what's left after the fixed lower half (the
-        # right column is ~18 rows; the left one shrinks itself separately)
         gh = min(4, max(0, (h - y[0]) - 28))
 
         def draw_toks(x0, width, st, hist, label, path):
@@ -306,17 +309,17 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
             scale = 25.0
             if tmax := max(hist):
                 scale = max(25.0, -(-int(tmax) // 25) * 25)   # ceil to a 25 step
-            # leave room for the "] 1234 tok/s prefill" suffix so a
-            # side-by-side neighbour never gets written over
-            bw = max(12, width - 26)
-            gl, gr = x0 + 5, x0 + 6 + bw     # frame edges, data between
-            xb = x0 + len(f" {label} [")     # bar data starts after '['
-            bar_w = max(2, gr - 1 - xb)
-            f = int(bar_w * max(0.0, min(1.0, st["cur"] / scale)) + 0.5)
-            add(y[0], x0, f" {label} [")
+            # the bar line and the frame both fill the graph's column
+            # exactly, so the two graphs line up with the boxes below
+            pre = f" {label} ["
+            xb = x0 + len(pre)
+            suffix = f"] {st['txt']}"
+            bw = max(4, width - len(pre) - len(suffix))
+            f = int(bw * max(0.0, min(1.0, st["cur"] / scale)) + 0.5)
+            add(y[0], x0, pre, B)
             add(y[0], xb, "█" * f, curses.color_pair(1))
-            add(y[0], xb + f, "█" * (bar_w - f), curses.A_DIM)
-            add(y[0], gr, f"] {st['txt']}", B)
+            add(y[0], xb + f, "█" * (bw - f), curses.A_DIM)
+            add(y[0], xb + bw, suffix, B)
             y[0] += 1
             if gh:
                 # avg over active samples only — the zeros in the hist mark
@@ -324,41 +327,41 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
                 # (survives the rolling window; the scale stays window-based)
                 active = [v for v in hist if v > 0]
                 avg = f"{sum(active) / len(active):.0f}" if active else "–"
-                stats = (f" · avg {avg} · max {st['peak']:.0f} "
+                stats = (f"· avg {avg} · max {st['peak']:.0f} "
                          if st["peak"] > 0 else "")
                 base = f" tok/s 0–{scale:.0f} "
-                t = (base[:-1] + stats if len(base) + len(stats) <= bw
-                     else base if len(base) <= bw else "")
-                add(y[0], gl,
-                    "┌" + t + "─" * max(0, gr - gl + 1 - 2 - len(t)) + "┐",
+                t = (base + stats if len(base) + len(stats) <= width - 2
+                     else base if len(base) <= width - 2 else "")
+                add(y[0], x0,
+                    "┌" + t + "─" * max(0, width - 2 - len(t)) + "┐",
                     curses.A_DIM)
                 y[0] += 1
-                data = list(hist)[-bw:]
-                off = bw - len(data)
+                data = list(hist)[-(width - 4):]
+                off = (width - 4) - len(data)
                 for i, v in enumerate(data):
                     ch = int(gh * v / scale + 0.5)
                     for r in range(gh - ch, gh):
-                        add(y[0] + r, gl + 1 + off + i, "█",
+                        add(y[0] + r, x0 + 2 + off + i, "█",
                             curses.color_pair(1))
                 for r in range(gh):
-                    add(y[0] + r, gl, "│", curses.A_DIM)
-                    add(y[0] + r, gr, "│", curses.A_DIM)
+                    add(y[0] + r, x0, "│", curses.A_DIM)
+                    add(y[0] + r, x0 + width - 1, "│", curses.A_DIM)
                 y[0] += gh
-                add(y[0], gl, "└" + "─" * (gr - gl - 1) + "┘", curses.A_DIM)
+                add(y[0], x0, "└" + "─" * (width - 2) + "┘", curses.A_DIM)
                 y[0] += 1
             txt = (f"last: {st['summary']}" if st["summary"]
                    else "no completions yet — tok/s appears during generation")
-            add(y[0], gl + 1, txt[: max(1, gr - gl - 2)], curses.A_DIM)
+            add(y[0], x0 + 2, txt[: max(1, width - 4)], curses.A_DIM)
             y[0] += 1
 
-        # both graphs share the same rows: draw each from the same top
-        # line (draw_toks advances y, so reset it per graph), then land
-        # below whichever is taller — they're always equal-height
+        # both graphs share the same rows and line up with the column
+        # grid below (left half / right half): draw each from the same
+        # top line, then land below — they're always equal-height
+        gcols = [(0, lw), (rx, rw)] if small_port else [(0, w - 1)]
         y_top = y[0]
-        for i, (st, hist, label, path) in enumerate(graphs):
+        for (st, hist, label, path), (gx0, gwd) in zip(graphs, gcols):
             y[0] = y_top
-            draw_toks(i * (gw + 2), min(gw, w - i * (gw + 2)),
-                      st, hist, label, path)
+            draw_toks(gx0, gwd, st, hist, label, path)
         y[0] = y_top + (gh + 4 if gh else 2)
         put()
 
@@ -376,13 +379,10 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
             _set_title(title)
 
         # --- lower half, one grid: CPU left / cores right, then clients
-        # left / processes right (boxed), then a full-width logs box; the
-        # RAM/swap bars and the quit hint stay pinned to the bottom rows ---
+        # left / processes right (boxed), then the RAM/swap bars and the
+        # logs box at the very bottom; the q hint owns the last row ---
         top = y[0]
-        rx = w // 2 + 1
-        lw = rx - 1              # left boxes span x=0 .. rx-1
-        rw = w - rx - 1          # right boxes span x=rx .. w-2
-        bottom = (2 if sw.total else 1) + 2   # bars + gap + quit line
+        usable = h - 1            # the last row is the q hint
 
         def clip(text, width):
             return text if len(text) <= width else text[:max(0, width - 1)] + "…"
@@ -407,7 +407,7 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         cw = 6                   # "C00[██████]  30%" cell, 16 chars, pitch 18
         rcols = max(1, (rw - 4) // (cw + 12))
         crows = (len(percpu) + rcols - 1) // rcols
-        band = (h - bottom) - ly
+        band = usable - ly
         show_cores = band >= crows + 2
         cpu_g = 4 if band >= max(6, crows + 2) else (
             2 if band >= max(4, crows + 2) else 0)
@@ -469,7 +469,7 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
             proc_rows.append(("no mlx/litellm processes found",
                               curses.color_pair(3)))
         gy = max(ly, ry) + 1
-        band2 = (h - bottom) - gy
+        band2 = usable - gy
         n_cli = min(len(client_cmds), band2 - 2) if band2 >= 3 else 0
         n_proc = min(len(proc_rows), band2 - 2) if band2 >= 3 else 0
         if n_cli:
@@ -485,33 +485,12 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
                 box_sides(gy + 1 + i, rx, rw)
             box_bottom(gy + 1 + n_proc, rx, rw)
 
-        # --- logs (full width): recent errors first, then the latest lines;
-        # grows to fill the slack above the bottom bars ---
+        # --- RAM/swap bars right below the boxes; clamped so they never
+        # run onto the q hint row on terminals too short for everything ---
         ended = max(n_cli, n_proc)
-        ly2 = gy + ended + 2 if ended else gy
-        band3 = (h - bottom) - ly2
-        errs = [(tag, l) for tag, path in LOGS for l in tail_errors(path)][-3:]
-        log_rows = [(f"[{tag}] {l}", curses.color_pair(3)) for tag, l in errs]
-        if band3 >= 3:
-            room = max(0, band3 - 2 - len(log_rows))
-            shown = [(tag, l) for tag, path in LOGS
-                     for l in tail_lines(path, room)][-room:] if room else []
-            log_rows += [(f"[{tag}] {l}", curses.A_DIM) for tag, l in shown]
-            if not log_rows:
-                log_rows = [("no errors · logs empty", curses.color_pair(1))]
-            n_log = min(len(log_rows), band3 - 2)
-        else:
-            n_log = 0
-        if n_log:
-            box_top(ly2, 0, w - 1, " logs ")
-            for i, (text, attr) in enumerate(log_rows[:n_log]):
-                add(ly2 + 1 + i, 2, clip(text, w - 5), attr)
-                box_sides(ly2 + 1 + i, 0, w - 1)
-            box_bottom(ly2 + 1 + n_log, 0, w - 1)
-
-        # --- RAM/swap bars, pinned to the bottom rows ---
+        by = gy + ended + 2 if ended else gy
+        by = min(by, usable - (2 if sw.total else 1))
         bw_b = max(8, w - 30)    # room for "]  77%  95.1G/128.0G"
-        by = h - (2 if sw.total else 1) - 1
         put_bar(by, 0, " MEM [", bw_b, vm.percent / 100,
                 f"] {vm.percent:3.0f}%"
                 f"  {ui.human_bytes(vm.used)}/{ui.human_bytes(vm.total)}")
@@ -519,6 +498,28 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
             put_bar(by + 1, 0, " SWP [", bw_b, sw.percent / 100,
                     f"] {sw.percent:3.0f}%"
                     f"  {ui.human_bytes(sw.used)}/{ui.human_bytes(sw.total)}")
+
+        # --- logs: the very bottom box, its tail sitting just above the
+        # bottom border; grows/shrinks with the terminal ---
+        lt = by + (2 if sw.total else 1) + 1
+        height = usable - lt                 # rows incl. top/bottom borders
+        errs = [(tag, l) for tag, path in LOGS for l in tail_errors(path)][-3:]
+        log_rows = [(f"[{tag}] {l}", curses.color_pair(3)) for tag, l in errs]
+        if height >= 3:
+            content = height - 2
+            room = max(0, content - len(log_rows))
+            shown = [(tag, l) for tag, path in LOGS
+                     for l in tail_lines(path, room)][-room:] if room else []
+            log_rows += [(f"[{tag}] {l}", curses.A_DIM) for tag, l in shown]
+            if not log_rows:
+                log_rows = [("no errors · logs empty", curses.color_pair(1))]
+            n_log = min(len(log_rows), content)
+            box_top(lt, 0, w - 1, " logs ")
+            first = lt + 1 + (content - n_log)   # tail hugs the bottom border
+            for i, (text, attr) in enumerate(log_rows[-n_log:]):
+                add(first + i, 2, clip(text, w - 5), attr)
+                box_sides(first + i, 0, w - 1)
+            box_bottom(lt + height - 1, 0, w - 1)
 
         logs = ("/tmp/mlx-server.log, /tmp/mlx-small.log, /tmp/litellm.log"
                 if small_port else
