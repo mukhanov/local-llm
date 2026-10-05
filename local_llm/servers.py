@@ -18,6 +18,7 @@ from pathlib import Path
 from . import hf, ui
 
 MLX_LOG = "/tmp/mlx-server.log"
+MLX_SMALL_LOG = "/tmp/mlx-small.log"
 LITELLM_LOG = "/tmp/litellm.log"
 
 # Popen handles of live children — killed in stop_children()
@@ -158,7 +159,52 @@ def start_mlx(cfg, model: str) -> None:
                 cfg.load_timeout, MLX_LOG, "mlx_lm.server")
 
 
-def _write_litellm_config(cfg, model: str) -> None:
+def start_mlx_small(cfg) -> None:
+    """The tiny helper model on its own port: cheap classification/title
+    calls (Claude Code's background requests have a short fixed timeout and
+    would queue for minutes behind the big model's generation) plus a quick
+    `ollmlx/small` for any client. Same flags as the big one are pointless
+    here: no KV quant (nothing to save on ~0.4G weights), no prompt-cache
+    cap (its caches are a few MB)."""
+    ui.info(f"Starting helper model {cfg.small_model} on :{cfg.mlx_small_port}")
+    # only stale instances of *this* model — start_mlx already swept the broad
+    # pattern, and the main server must survive this pkill
+    _pkill(f"local_llm\\.mlxwrap.*{re.escape(cfg.small_model)}")
+    time.sleep(1)
+    python = (str(cfg.venv_python) if cfg.venv_python.exists()
+              else sys.executable)
+    # thinking off by default: hybrid-Qwen3 would burn ~200 hidden tokens
+    # pondering a one-word answer (0.9s); a request can still re-enable it
+    # via chat_template_kwargs — per-request args override the CLI ones
+    flags = (["--chat-template-args", '{"enable_thinking":false}']
+             if "--chat-template-args" in _server_flags(python) else [])
+    env = dict(os.environ)
+    env["HF_HUB_OFFLINE"] = "1"
+    env["HF_HUB_DISABLE_XET"] = "1"
+    log = open(MLX_SMALL_LOG, "wb")
+    try:
+        proc = subprocess.Popen(
+            [python, "-m", "local_llm.mlxwrap",
+             "--model", cfg.small_model, "--host", "127.0.0.1",
+             "--port", str(cfg.mlx_small_port),
+             "--max-tokens", "4096", *flags],
+            stdout=log, stderr=subprocess.STDOUT, env=env)
+    finally:
+        log.close()
+    children.append(proc)
+    _wait_ready(f"http://127.0.0.1:{cfg.mlx_small_port}/v1/models", proc,
+                120, MLX_SMALL_LOG, "helper model")
+
+
+def _write_litellm_config(cfg, model: str, small: bool = True) -> None:
+    small_block = (f"""\
+  - model_name: "small"          # tiny helper: background calls / titles
+    litellm_params:
+      model: "openai/{cfg.small_model}"
+      api_base: "http://127.0.0.1:{cfg.mlx_small_port}/v1"
+      api_key: "none"
+      request_timeout: 120
+""" if small else "")
     cfg.litellm_cfg.write_text(f"""\
 model_list:
   - model_name: "{model}"
@@ -173,7 +219,7 @@ model_list:
       api_base: "http://127.0.0.1:{cfg.mlx_port}/v1"
       api_key: "none"
       request_timeout: 600
-
+{small_block}
 litellm_settings:
   drop_params: true
 
@@ -182,7 +228,7 @@ general:
 """)
 
 
-def start_litellm(cfg, model: str) -> None:
+def start_litellm(cfg, model: str, small: bool = True) -> None:
     health = f"http://127.0.0.1:{cfg.litellm_port}/health/liveliness"
     if http_ok(health):
         ui.ok(f"litellm already running on :{cfg.litellm_port}"
@@ -190,7 +236,7 @@ def start_litellm(cfg, model: str) -> None:
         _pkill(f"litellm --config")
         time.sleep(2)
     ui.info(f"Starting litellm on :{cfg.litellm_port}")
-    _write_litellm_config(cfg, model)
+    _write_litellm_config(cfg, model, small)
     env = dict(os.environ)
     # Anthropic bridge /v1/messages -> chat/completions (mlx has no /v1/responses)
     env["LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES"] = "1"

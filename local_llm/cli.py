@@ -12,7 +12,9 @@ local-llm — bring up a local MLX model + an API for claude / pi / omp.
 What it does:
   1. Shows local/recommended models (TUI: scroll, search, load-more from
      HuggingFace, sorting by hardware fit), downloads the chosen one.
-  2. Starts mlx_lm.server (OpenAI API) and a litellm proxy (OpenAI
+  2. Starts mlx_lm.server (OpenAI API), a tiny helper model (:8081, alias
+     ollmlx/small — Claude Code's background calls like title generation,
+     any client's quick asks) and a litellm proxy (OpenAI
      /v1/chat/completions + Anthropic /v1/messages for Claude Code) — as
      foreground children, no daemons: exiting the monitor or Ctrl-C stops
      everything at once.
@@ -31,7 +33,8 @@ Usage (symlink: ~/bin/local-llm):
   local-llm token [hf_…]   # HF token: show / save / --clear (or env HF_TOKEN)
 
 Env: MLX_KV_BITS=8 (KV-cache quantization, 0=off), MLX_PROMPT_CACHE_BYTES (0=off),
-     MLX_PORT, LITELLM_PORT, LOAD_TIMEOUT, OLLMLX_HOME, HF_HUB_CACHE"""
+     MLX_PORT, LITELLM_PORT, LOAD_TIMEOUT, OLLMLX_HOME, HF_HUB_CACHE,
+     OLLMLX_SMALL_MODEL / MLX_SMALL_PORT (tiny helper model for fast calls)"""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,10 +96,28 @@ def run_stack(cfg: Config, model: str) -> int:
         ui.ok("download complete")
     else:
         ui.ok("already downloaded")
+
+    # tiny helper model for fast/background calls — if it can't be fetched
+    # (HF unreachable, cache cold) we degrade instead of blocking the stack:
+    # everything then runs on the big model like before
+    small_ok = True
+    if not hf.is_cached(cfg.hf_hub, cfg.small_model):
+        ui.info(f"Downloading helper model {cfg.small_model} (~0.5GB)")
+        try:
+            hf.download(cfg.small_model, cfg.hf_token, cfg.hf_hub)
+        except SystemExit:
+            pass
+        small_ok = hf.is_cached(cfg.hf_hub, cfg.small_model)
+        if not small_ok:
+            ui.warn("helper model unavailable — continuing without it"
+                    " (fast/background calls will use the main model)")
+
     try:
         servers.start_mlx(cfg, model)
-        servers.start_litellm(cfg, model)
-        clients.write_client_configs(cfg, model)
+        if small_ok:
+            servers.start_mlx_small(cfg)
+        servers.start_litellm(cfg, model, small_ok)
+        clients.write_client_configs(cfg, model, small_ok)
         servers.warmup(cfg)
         print()
         ui.info(f"Ready. OpenAI and Anthropic APIs on"
@@ -104,11 +125,15 @@ def run_stack(cfg: Config, model: str) -> int:
         print(f"  pi:      pi --model ollmlx/local   ({model})")
         print(f"  omp:     omp --model ollmlx/local   ({model})")
         print(f"  claude:  claude --settings {cfg.claude_cfg}")
+        if small_ok:
+            print(f"  fast/bg: ollmlx/small  ({cfg.small_model} on"
+                  f" :{cfg.mlx_small_port} — titles, quick asks)")
         print()
         ui.info("System monitor (q or Ctrl-C stops everything)")
         home = str(Path.home())
         monitor.run(model, cfg.mlx_port, cfg.litellm_port,
-                    str(cfg.claude_cfg).replace(home, "~"))
+                    str(cfg.claude_cfg).replace(home, "~"),
+                    cfg.mlx_small_port if small_ok else 0)
     finally:
         servers.stop_children()
     print()

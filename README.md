@@ -43,6 +43,23 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   interleaved tqdm bars are disabled).
 - **API bridge** — OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`
   on one port, model exposed under a stable alias `ollmlx/local`.
+- **Fast helper model** — a second tiny model (default
+  `Qwen3-0.6B-4bit`, ~0.5GB / ~1GB RAM, negligible GPU) served on its own
+  port as `ollmlx/small`. Claude Code's background calls (session titles
+  and other haiku-slot traffic) use it via `ANTHROPIC_SMALL_FAST_MODEL` —
+  they have a short fixed timeout and used to die queued behind the big
+  model's generation. The auto-mode Bash safety classifier is a separate
+  path: on non-Anthropic providers it deliberately runs on the session
+  model over a trimmed transcript, so its first call after the context
+  grows pays the prefill delta — a retry succeeds once it's cached
+  (keeping long sessions `/compact`ed helps). omp's `smol` model role is
+  pinned to it in
+  `~/.omp/agent/config.yml` (commit messages, memory notes, `--prewalk` /
+  `--plan-yolo` execution all route through that role). pi (v1.0.x) has no
+  role harness — there `ollmlx/small` is a plain catalog entry
+  (`--model ollmlx/small`, or `/model` in-session). If the helper can't be
+  downloaded, the stack degrades to everything-on-the-big-model instead of
+  failing.
 - **Client config writer** — registers the model in `pi` and `omp` model
   catalogs and generates a Claude Code settings file.
 - **System monitor** — htop-style curses UI: the model's live tokens/sec
@@ -166,16 +183,27 @@ $ curl http://127.0.0.1:4000/v1/messages \
 
 ### Monitor
 
-Shows the model's live **tokens/sec** (current decode rate and a history
-graph; the prompt-processing rate while it prefill-reads your prompt; a
-one-line summary of the last completion), then CPU per core with a history
-graph, RAM/swap, port status, mlx/litellm process stats, the client launch
-commands and the latest errors from `/tmp/mlx-server.log` and
-`/tmp/litellm.log`. Press `q` (or Ctrl-C) to stop the whole stack.
+Two **tokens/sec** graphs side by side — the big model and the helper,
+each with its own scale (30 vs 300 tok/s would flatten each other on a
+shared axis): current decode rate, history graph, the prompt-processing
+rate while it prefill-reads your prompt, and a one-line summary of the
+last completion. Below them the screen splits into two columns: the
+system on the left (CPU with a history graph, per-core grid, RAM/swap)
+and the stack on the right (mlx/litellm process stats, each with its
+share of RAM, plus a ledger line: the stack's total vs the rest of the
+machine and what's still available; the client launch commands; the
+latest errors and log tails from `/tmp/mlx-server.log`,
+`/tmp/mlx-small.log` and `/tmp/litellm.log`). Press `q` (or Ctrl-C) to
+stop the whole stack.
 
 The tok/s numbers come from a thin wrapper around `mlx_lm.server`
 (`local_llm.mlxwrap`): it counts generated tokens and logs `TOKPS` lines
 once a second — the monitor graphs them.
+
+While the stack is up, the terminal tab is titled with the model and the
+live RAM of the model processes (`ollmlx · <model> · 65G`) — the way
+Claude Code names its sessions in the tab bar; quitting restores the
+tab's previous title.
 
 ## Configuration
 
@@ -185,9 +213,11 @@ All via environment variables:
 |---------------------------|--------------|--------------------------------------------|
 | `MLX_PORT`                | `8080`       | mlx_lm.server port (OpenAI API)            |
 | `LITELLM_PORT`            | `4000`       | litellm proxy port (OpenAI + Anthropic)    |
-| `MLX_KV_BITS`             | `8`          | KV-cache quantization, `0` = off           |
+| `OLLMLX_SMALL_MODEL`      | `mlx-community/Qwen3-0.6B-4bit` | tiny helper model |
+| `MLX_SMALL_PORT`          | `8081`       | helper model port (`ollmlx/small`)         |
+| `MLX_KV_BITS`             | `0`          | KV quantization; breaks prompt-cache hits on long contexts — only for ~100G models |
 | `MLX_KV_GROUP_SIZE`       | `64`         | KV-cache group size                        |
-| `MLX_PROMPT_CACHE_BYTES`  | `8589934592` | prompt-cache cap, `0` = unlimited          |
+| `MLX_PROMPT_CACHE_BYTES`  | `17179869184` | prompt-cache cap (16GB ≈ 136k tokens on the 122B), `0` = unlimited |
 | `LOAD_TIMEOUT`            | `900`        | seconds to wait for weights to load        |
 | `OLLMLX_HOME`             | `~/.ollmlx`  | venv, litellm config, token, claude config |
 | `HF_HUB_CACHE`            | `~/.cache/huggingface/hub` | model cache path           |
@@ -209,7 +239,7 @@ generation thread — 8-bit keeps a 100GB-class model stable in 128GB RAM.
 | `~/.pi/agent/models.json`             | `pi` model catalog (merged)      |
 | `~/.omp/agent/models.json`            | `omp` model catalog (merged)     |
 | `~/.cache/huggingface/hub`            | downloaded models                |
-| `/tmp/mlx-server.log`, `/tmp/litellm.log` | server logs                 |
+| `/tmp/mlx-server.log`, `/tmp/mlx-small.log`, `/tmp/litellm.log` | server logs |
 
 Deleting models (`local-llm rm`) is aware of the hub 1.x shared blob store
 (`hub/blobs/<xx>/<sha>`): it frees the real weights and never touches blobs

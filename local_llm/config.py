@@ -11,13 +11,26 @@ class Config:
     mlx_port: int
     litellm_port: int
     api_key: str
-    # KV-cache quantization: long prompts (claude sends ~30k tokens) on large
-    # models (~101G of 128G RAM) eat the remainder -> Metal OOM -> the
-    # generation thread dies and the server answers 404 to everything until
-    # restarted. 8 bits = half the memory. 0 = off.
+    # Second, tiny model for cheap fast calls (Claude Code's background
+    # title generator and other haiku-slot calls, which use a short fixed
+    # timeout and would otherwise queue behind the big model's generation).
+    small_model: str
+    mlx_small_port: int
+    # KV-cache quantization: halves KV memory but, on mlx_lm 0.32, forces the
+    # sequential serving path where the prompt cache cannot match long
+    # conversations (QuantizedKVCache isn't trimmable) — every request then
+    # re-prefills the whole 100k+ prompt, minutes per call. Enable only for
+    # models whose weights (~100G of 128G RAM) plus fp16 KV would OOM Metal
+    # (the generation thread dies and the server 404s until restarted).
     kv_bits: int
     kv_group_size: int
-    # Prompt cache cap (bytes), 0 = no cap.
+    # Prompt cache cap (bytes), 0 = no cap. Must exceed the KV of the
+    # biggest session you keep alive, or every call re-prefills it from
+    # scratch (~96KB/token on the 122B: a 123k-token context is ~12GB —
+    # the old 8GB cap never held it, costing a 5-minute prefill per call).
+    # 16GB = ~136k tokens of KV; with 65GB weights that's the budget for
+    # one mega-session on a 128GB Mac (two concurrent ones risk Metal OOM,
+    # which kills the generation thread until restart).
     prompt_cache_bytes: int
     load_timeout: int  # seconds to wait for weights to load
 
@@ -56,10 +69,13 @@ class Config:
             mlx_port=int(os.environ.get("MLX_PORT", "8080")),
             litellm_port=int(os.environ.get("LITELLM_PORT", "4000")),
             api_key="sk-local-llm",
-            kv_bits=int(os.environ.get("MLX_KV_BITS", "8")),
+            small_model=os.environ.get(
+                "OLLMLX_SMALL_MODEL", "mlx-community/Qwen3-0.6B-4bit"),
+            mlx_small_port=int(os.environ.get("MLX_SMALL_PORT", "8081")),
+            kv_bits=int(os.environ.get("MLX_KV_BITS", "0")),
             kv_group_size=int(os.environ.get("MLX_KV_GROUP_SIZE", "64")),
             prompt_cache_bytes=int(
-                os.environ.get("MLX_PROMPT_CACHE_BYTES", str(8 * 1024**3))
+                os.environ.get("MLX_PROMPT_CACHE_BYTES", str(16 * 1024**3))
             ),
             load_timeout=int(os.environ.get("LOAD_TIMEOUT", "900")),
         )
