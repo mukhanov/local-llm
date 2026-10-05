@@ -187,23 +187,25 @@ Two **tokens/sec** graphs side by side — the big model and the helper,
 each with its own scale (30 vs 300 tok/s would flatten each other on a
 shared axis): current decode rate, history graph, the prompt-processing
 rate while it prefill-reads your prompt, and a one-line summary of the
-last completion. Below them the screen splits into two columns: the
-system on the left (CPU with a history graph, per-core grid, RAM/swap)
-and the stack on the right (mlx/litellm process stats, each with its
+last completion. Below them, in a grid: CPU with a history graph on the
+left and the per-core grid on the right, then the client launch commands
+on the left and mlx/litellm process stats on the right (each with its
 share of RAM, plus a ledger line: the stack's total vs the rest of the
-machine and what's still available; the client launch commands; the
+machine and what's still available), then a full-width box with the
 latest errors and log tails from `/tmp/mlx-server.log`,
-`/tmp/mlx-small.log` and `/tmp/litellm.log`). Press `q` (or Ctrl-C) to
-stop the whole stack.
+`/tmp/mlx-small.log` and `/tmp/litellm.log` — it grows to fill the space
+above the RAM/swap bars, which sit pinned to the bottom rows next to the
+`q` hint. Press `q` (or Ctrl-C) to stop the whole stack.
 
 The tok/s numbers come from a thin wrapper around `mlx_lm.server`
 (`local_llm.mlxwrap`): it counts generated tokens and logs `TOKPS` lines
 once a second — the monitor graphs them.
 
-While the stack is up, the terminal tab is titled with the model and the
-live RAM of the model processes (`ollmlx · <model> · 65G`) — the way
-Claude Code names its sessions in the tab bar; quitting restores the
-tab's previous title.
+While the stack is up, the terminal tab is titled with the model, the
+live RAM of the model processes and the model's live tokens/s while it
+generates (`ollmlx · <model> · 65G · 17 tok/s`) — the way Claude Code
+names its sessions in the tab bar; quitting restores the tab's previous
+title.
 
 ## Configuration
 

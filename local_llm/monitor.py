@@ -90,9 +90,20 @@ def _set_title(text: str) -> None:
         pass
 
 
-def _tab_title(model: str, procs) -> str:
+def _rate_txt(st) -> str:
+    """Live rate as tab-sized text: decode '42 tok/s', prefill labelled —
+    a 1000 tok/s prefill must never read as generation speed."""
+    if st["txt"] == "idle" or st["cur"] <= 0:
+        return ""
+    if "prefill" in st["txt"]:
+        return f"{st['cur']:.0f} tok/s prefill"
+    return f"{st['cur']:.1f} tok/s" if st["cur"] < 10 else f"{st['cur']:.0f} tok/s"
+
+
+def _tab_title(model: str, procs, rate: str = "") -> str:
     """Tab text: short model name + RAM of the model processes (mlx and
-    the helper; litellm is a proxy, not a model — not counted)."""
+    the helper; litellm is a proxy, not a model — not counted) + the live
+    tok/s of whichever model is generating."""
     ram = 0
     for label, p in procs:
         if label == "litellm":
@@ -103,7 +114,10 @@ def _tab_title(model: str, procs) -> str:
             pass
     short = model.split("/")[-1]
     short = short[:25] + "…" if len(short) > 26 else short
-    return f"ollmlx · {short} · {ui.human_bytes(ram)}" if ram else f"ollmlx · {short}"
+    tail = f" · {ui.human_bytes(ram)}" if ram else ""
+    if rate:
+        tail += f" · {rate}"
+    return f"ollmlx · {short}{tail}"
 
 
 def tail_errors(path: str, k: int = 2):
@@ -250,12 +264,6 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         vm, sw = psutil.virtual_memory(), psutil.swap_memory()
         procs = watch_procs(small_port)
 
-        # --- tab title: what this tab runs, with live RAM of the models ---
-        title = _tab_title(model, procs)
-        if title != prev_title:
-            prev_title = title
-            _set_title(title)
-
         # --- header ---
         put(f" ollmlx — {model}", B | curses.color_pair(4))
         mlx = f"mlx :{mlx_port} ●up" if port_ok(mlx_port) else f"mlx :{mlx_port} ○down"
@@ -354,152 +362,168 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         y[0] = y_top + (gh + 4 if gh else 2)
         put()
 
-        # --- lower half: two columns instead of one long stack — the
-        # system (CPU / cores / RAM) on the left, the stack itself
-        # (clients, processes, errors, logs) on the right ---
+        # --- tab title: what this tab runs, with live RAM and the live
+        # tok/s of whichever model is generating (the helper's rate only
+        # when the main model is idle, and labelled — never one number) ---
+        rate = _rate_txt(tok)
+        if not rate and small_port:
+            rate = _rate_txt(tok_s)
+            if rate:
+                rate = f"small {rate}"
+        title = _tab_title(model, procs, rate)
+        if title != prev_title:
+            prev_title = title
+            _set_title(title)
+
+        # --- lower half, one grid: CPU left / cores right, then clients
+        # left / processes right (boxed), then a full-width logs box; the
+        # RAM/swap bars and the quit hint stay pinned to the bottom rows ---
         top = y[0]
         rx = w // 2 + 1
+        lw = rx - 1              # left boxes span x=0 .. rx-1
+        rw = w - rx - 1          # right boxes span x=rx .. w-2
+        bottom = (2 if sw.total else 1) + 2   # bars + gap + quit line
 
-        # right column: clients, our processes, errors, logs
-        ry = top
-        add(ry, rx, " client launch commands:", curses.A_DIM)
-        ry += 1
-        for name, cmd in client_cmds:
-            add(ry, rx, f"   {name:<6}  {cmd}", B)
-            ry += 1
-        ry += 1
-        ours = 0
-        for name, p in procs:
-            try:
-                cpu, rss = p.cpu_percent(), p.memory_info().rss
-                ours += rss
-                add(ry, rx, f" {name:<14} pid {p.pid:<7} {cpu:5.1f}% cpu"
-                    f"  {ui.human_bytes(rss):>7} rss"
-                    f" {rss / vm.total * 100:4.1f}% ram"
-                    f"  {p.num_threads()} thr",
-                    curses.color_pair(heat(min(100.0, cpu))))
-                ry += 1
-            except Exception:
-                pass
-        if not procs:
-            add(ry, rx, " no mlx/litellm processes found", curses.color_pair(3))
-            ry += 1
-        else:
-            # RAM ledger: our procs' share vs the rest of the machine.
-            # "others" = the kernel's used minus us (system, apps, the
-            # compressor — everything that keeps running when the stack is
-            # down); "available" is what macOS can still hand out before
-            # swapping starts.
-            others = max(0, vm.used - ours)
-            add(ry, rx,
-                f" llm {ui.human_bytes(ours)} · {ours / vm.total:.0%} of RAM"
-                f" · others {ui.human_bytes(others)}"
-                f" · available {ui.human_bytes(vm.available)}",
-                curses.color_pair(heat(vm.percent)))
-            ry += 1
-        ry += 1
-        add(ry, rx, " recent errors:", curses.A_DIM)
-        ry += 1
-        errs = [(tag, l) for tag, path in LOGS for l in tail_errors(path)]
-        if errs:
-            for tag, l in errs[-4:]:
-                add(ry, rx, f" [{tag}] {l}", curses.color_pair(3))
-                ry += 1
-        else:
-            add(ry, rx, " no errors", curses.color_pair(1))
-            ry += 1
-        ry += 1
-        add(ry, rx, " latest logs:", curses.A_DIM)
-        ry += 1
-        shown = [(tag, l) for tag, path in LOGS for l in tail_lines(path)]
-        if shown:
-            for tag, l in shown[-4:]:
-                add(ry, rx, f" [{tag}] {l}", curses.A_DIM)
-                ry += 1
-        else:
-            add(ry, rx, " logs empty", curses.A_DIM)
-            ry += 1
+        def clip(text, width):
+            return text if len(text) <= width else text[:max(0, width - 1)] + "…"
 
-        # left column: CPU bar + history graph + per-core grid + RAM bars;
-        # shrinks itself to the height that remains (graph height first,
-        # then the cores grid, then the graph) instead of pushing the
-        # footer off-screen
+        def box_top(yy, x0, wt, title=""):
+            t = f" {title} " if title else ""
+            add(yy, x0, "┌" + t + "─" * max(0, wt - 2 - len(t)) + "┐",
+                curses.A_DIM)
+
+        def box_bottom(yy, x0, wt):
+            add(yy, x0, "└" + "─" * max(0, wt - 2) + "┘", curses.A_DIM)
+
+        def box_sides(yy, x0, wt):
+            add(yy, x0, "│", curses.A_DIM)
+            add(yy, x0 + wt - 1, "│", curses.A_DIM)
+
+        # --- CPU (left) / cores (right) ---
         ly = top
-        bw_l = max(8, rx - 28)   # room for the "]  86%  106.9G/128.0G" suffix
+        bw_l = max(8, lw - 16)   # room for the CPU bar's "] 100.0%" suffix
         put_bar(ly, 0, " CPU [", bw_l, total / 100, f"] {total:5.1f}%", B)
         ly += 1
-        mem_rows = 2 if sw.total else 1
-        avail_l = (h - 3) - ly
-        # ~15-char "C00[██]100%" cells; a single cell per row is pointless
-        cols_n = max(2, (bw_l - 6) // 15)
-        cores_rows = (len(percpu) + cols_n - 1) // cols_n + 2
-
-        def left_h(g, cores):
-            return ((g + 2 if g else 0) + 1
-                    + (cores_rows + 1 if cores else 0) + mem_rows)
-
-        cpu_g = 4 if avail_l >= left_h(4, True) else 2
-        cores = True
-        if avail_l < left_h(cpu_g, cores):
-            cpu_g = 2 if avail_l >= left_h(2, True) else 0
-        if avail_l < left_h(cpu_g, cores):
-            cores = False
+        cw = 6                   # "C00[██████]  30%" cell, 16 chars, pitch 18
+        rcols = max(1, (rw - 4) // (cw + 12))
+        crows = (len(percpu) + rcols - 1) // rcols
+        band = (h - bottom) - ly
+        show_cores = band >= crows + 2
+        cpu_g = 4 if band >= max(6, crows + 2) else (
+            2 if band >= max(4, crows + 2) else 0)
         if cpu_g:
-            gl, gr = 5, 6 + bw_l
-            title = " CPU history " if bw_l >= 15 else ""
-            add(ly, gl,
-                "┌" + title + "─" * max(0, gr - gl + 1 - 2 - len(title)) + "┐",
-                curses.A_DIM)
-            ly += 1
-            data = list(cpu_hist)[-bw_l:]
-            off = bw_l - len(data)
+            box_top(ly, 0, lw, " CPU history ")
+            gw_l = max(4, lw - 4)                  # data columns inside
+            data = list(cpu_hist)[-gw_l:]
+            off = gw_l - len(data)
             for i, v in enumerate(data):
                 ch = int(cpu_g * v / 100 + 0.5)
                 col = curses.color_pair(heat(v))
                 for r in range(cpu_g - ch, cpu_g):
-                    add(ly + r, 6 + off + i, "█", col)
+                    add(ly + 1 + r, 2 + off + i, "█", col)
             for r in range(cpu_g):
-                add(ly + r, gl, "│", curses.A_DIM)
-                add(ly + r, gr, "│", curses.A_DIM)
-            ly += cpu_g
-            add(ly, gl, "└" + "─" * (gr - gl - 1) + "┘", curses.A_DIM)
+                box_sides(ly + 1 + r, 0, lw)
+            ly += 1 + cpu_g
+            box_bottom(ly, 0, lw)
             ly += 1
-        ly += 1
-        if cores:
-            cl, cr = 5, 6 + bw_l
-            cw = max(2, (bw_l - 6) // cols_n - 12)
-            title = " cores " if cr - cl >= 12 else ""
-            add(ly, cl,
-                "┌" + title + "─" * max(0, cr - cl + 1 - 2 - len(title)) + "┐",
-                curses.A_DIM)
-            ly += 1
-            for i in range(0, len(percpu), cols_n):
-                for side, v in enumerate(percpu[i:i + cols_n]):
+        ry = top
+        if show_cores:
+            box_top(ry, rx, rw, " cores ")
+            for i in range(0, len(percpu), rcols):
+                rr = i // rcols
+                for side, v in enumerate(percpu[i:i + rcols]):
                     f = int(cw * v / 100 + 0.5)
-                    add(ly, 6 + side * (cw + 12),
+                    add(ry + 1 + rr, rx + 2 + side * (cw + 12),
                         f"C{i + side:02d}[{'█' * f}{' ' * (cw - f)}]{v:4.0f}%",
                         curses.color_pair(heat(v)))
-                add(ly, cl, "│", curses.A_DIM)
-                add(ly, cr, "│", curses.A_DIM)
-                ly += 1
-            add(ly, cl, "└" + "─" * (cr - cl - 1) + "┘", curses.A_DIM)
-            ly += 1
-            ly += 1
-        put_bar(ly, 0, " MEM [", bw_l, vm.percent / 100,
+                box_sides(ry + 1 + rr, rx, rw)
+            ry += 1 + crows
+            box_bottom(ry, rx, rw)
+            ry += 1
+
+        # --- client launch commands (left) / processes (right) ---
+        ours = 0
+        proc_rows = []
+        for name, p in procs:
+            try:
+                cpu, rss = p.cpu_percent(), p.memory_info().rss
+                ours += rss
+                proc_rows.append(
+                    (f"{name:<14} pid {p.pid:<7} {cpu:5.1f}% cpu"
+                     f"  {ui.human_bytes(rss):>7} rss"
+                     f" {rss / vm.total * 100:4.1f}% ram"
+                     f"  {p.num_threads()} thr",
+                     curses.color_pair(heat(min(100.0, cpu)))))
+            except Exception:
+                pass
+        if proc_rows:
+            # RAM ledger: our procs' share vs the rest of the machine;
+            # "available" is what macOS can still hand out before swapping.
+            others = max(0, vm.used - ours)
+            proc_rows.append(
+                (f"llm {ui.human_bytes(ours)} · {ours / vm.total:.0%} of RAM"
+                 f" · others {ui.human_bytes(others)}"
+                 f" · available {ui.human_bytes(vm.available)}",
+                 curses.color_pair(heat(vm.percent))))
+        else:
+            proc_rows.append(("no mlx/litellm processes found",
+                              curses.color_pair(3)))
+        gy = max(ly, ry) + 1
+        band2 = (h - bottom) - gy
+        n_cli = min(len(client_cmds), band2 - 2) if band2 >= 3 else 0
+        n_proc = min(len(proc_rows), band2 - 2) if band2 >= 3 else 0
+        if n_cli:
+            box_top(gy, 0, lw, " clients ")
+            for i, (name, cmd) in enumerate(client_cmds[:n_cli]):
+                add(gy + 1 + i, 2, clip(f"{name:<6}  {cmd}", lw - 4), B)
+                box_sides(gy + 1 + i, 0, lw)
+            box_bottom(gy + 1 + n_cli, 0, lw)
+        if n_proc:
+            box_top(gy, rx, rw, " processes ")
+            for i, (text, attr) in enumerate(proc_rows[:n_proc]):
+                add(gy + 1 + i, rx + 2, clip(text, rw - 4), attr)
+                box_sides(gy + 1 + i, rx, rw)
+            box_bottom(gy + 1 + n_proc, rx, rw)
+
+        # --- logs (full width): recent errors first, then the latest lines;
+        # grows to fill the slack above the bottom bars ---
+        ended = max(n_cli, n_proc)
+        ly2 = gy + ended + 2 if ended else gy
+        band3 = (h - bottom) - ly2
+        errs = [(tag, l) for tag, path in LOGS for l in tail_errors(path)][-3:]
+        log_rows = [(f"[{tag}] {l}", curses.color_pair(3)) for tag, l in errs]
+        if band3 >= 3:
+            room = max(0, band3 - 2 - len(log_rows))
+            shown = [(tag, l) for tag, path in LOGS
+                     for l in tail_lines(path, room)][-room:] if room else []
+            log_rows += [(f"[{tag}] {l}", curses.A_DIM) for tag, l in shown]
+            if not log_rows:
+                log_rows = [("no errors · logs empty", curses.color_pair(1))]
+            n_log = min(len(log_rows), band3 - 2)
+        else:
+            n_log = 0
+        if n_log:
+            box_top(ly2, 0, w - 1, " logs ")
+            for i, (text, attr) in enumerate(log_rows[:n_log]):
+                add(ly2 + 1 + i, 2, clip(text, w - 5), attr)
+                box_sides(ly2 + 1 + i, 0, w - 1)
+            box_bottom(ly2 + 1 + n_log, 0, w - 1)
+
+        # --- RAM/swap bars, pinned to the bottom rows ---
+        bw_b = max(8, w - 30)    # room for "]  77%  95.1G/128.0G"
+        by = h - (2 if sw.total else 1) - 1
+        put_bar(by, 0, " MEM [", bw_b, vm.percent / 100,
                 f"] {vm.percent:3.0f}%"
                 f"  {ui.human_bytes(vm.used)}/{ui.human_bytes(vm.total)}")
-        ly += 1
         if sw.total:
-            put_bar(ly, 0, " SWP [", bw_l, sw.percent / 100,
+            put_bar(by + 1, 0, " SWP [", bw_b, sw.percent / 100,
                     f"] {sw.percent:3.0f}%"
                     f"  {ui.human_bytes(sw.used)}/{ui.human_bytes(sw.total)}")
-            ly += 1
 
-        # --- footer, under whichever column ended lower ---
         logs = ("/tmp/mlx-server.log, /tmp/mlx-small.log, /tmp/litellm.log"
                 if small_port else
                 "/tmp/mlx-server.log, /tmp/litellm.log")
-        add(max(ly, ry) + 1, 0, f" q — quit | logs: {logs}", curses.A_DIM)
+        add(h - 1, 0, f" q — quit | logs: {logs}", curses.A_DIM)
         stdscr.refresh()
 
         ch = stdscr.getch()
