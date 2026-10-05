@@ -405,7 +405,9 @@ def pick_plain(cfg, sys_ram: int, recommended: str, lf: dict | None = None) -> s
     print()
     ui.info("🖥️  System info")
     print(f"   RAM: {sys_ram}GB | GPU: {ui.gpu_name()}")
-    print(f"   💡 Recommended: {recommended} (~{models.ram_need_gb(recommended)}GB RAM)")
+    rec_ram = models.ram_estimate_gb(recommended)
+    print(f"   💡 Recommended: {recommended}"
+          + (f" (~{rec_ram}GB RAM)" if rec_ram else ""))
     print()
     ui.info("📊 Loading top MLX models from HuggingFace...")
     print()
@@ -427,7 +429,9 @@ def pick_plain(cfg, sys_ram: int, recommended: str, lf: dict | None = None) -> s
             print(f"      {models.describe(rid)}")
             state = f"⬇ {size} so far (still downloading)" if dling \
                 else f"💾 {size} on disk"
-            print(f"      {state} | ~{models.ram_need_gb(rid)}GB RAM"
+            ram = models.ram_estimate_gb(rid, (lf or {}).get(rid), size)
+            ram_txt = f"~{ram}GB RAM" if ram else "RAM ?"
+            print(f"      {state} | {ram_txt}"
                   f"{lf_bits(rid)}")
             shown.append(rid)
             i += 1
@@ -444,10 +448,12 @@ def pick_plain(cfg, sys_ram: int, recommended: str, lf: dict | None = None) -> s
             continue
         rec = "  ★ " if model == recommended else "    "
         dl = ui.human_downloads(downloads)
+        ram = models.ram_estimate_gb(model, (lf or {}).get(model))
+        ram_txt = f"~{ram}GB RAM" if ram else "RAM ?"
         print(f"{rec}{i:2d}) {model}")
         print(f"      {models.describe(model)}")
         print(f"      📥 {dl} downloads | ⭐ {likes} likes |"
-              f" ~{models.ram_need_gb(model)}GB RAM{lf_bits(model)}")
+              f" {ram_txt}{lf_bits(model)}")
         shown.append(model)
         i += 1
         shown_remote += 1

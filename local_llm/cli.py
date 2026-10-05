@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 
+import psutil
+
 from . import clients, hf, models, monitor, picker, servers, ui
 from .config import Config
 
@@ -70,6 +72,14 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_stack(cfg: Config, model: str) -> int:
+    # a port collision is a config error — fail before touching anything
+    # (the second server would die on bind and _wait_ready would kill the run)
+    if (cfg.mlx_port == cfg.mlx_small_port
+            or cfg.litellm_port in (cfg.mlx_port, cfg.mlx_small_port)):
+        raise SystemExit(
+            f"   port collision: mlx={cfg.mlx_port},"
+            f" small={cfg.mlx_small_port}, litellm={cfg.litellm_port}"
+            " — all three must differ (MLX_PORT / MLX_SMALL_PORT / LITELLM_PORT)")
     servers.ensure_litellm()
     ui.info(f"Model: {model}")
     missing = hf.missing_files(cfg.hf_hub, model, cfg.hf_token)
@@ -105,12 +115,33 @@ def run_stack(cfg: Config, model: str) -> int:
         ui.info(f"Downloading helper model {cfg.small_model} (~0.5GB)")
         try:
             hf.download(cfg.small_model, cfg.hf_token, cfg.hf_hub)
-        except SystemExit:
+        except (Exception, SystemExit):  # noqa: BLE001 — degrade, not die
             pass
         small_ok = hf.is_cached(cfg.hf_hub, cfg.small_model)
         if not small_ok:
             ui.warn("helper model unavailable — continuing without it"
                     " (fast/background calls will use the main model)")
+
+    # memory-pressure guard: weights + heavy swap is exactly how a session
+    # dies mid-work (Metal OOM kills the generation thread -> 404s until
+    # restart). Warn before loading, not after.
+    weights = hf.model_disk_bytes(cfg.hf_hub, model)
+    avail = psutil.virtual_memory().available
+    if weights and avail < weights + 4 * 1024**3:
+        ui.warn(f"only {ui.human_bytes(avail)} RAM available, the model's"
+                f" weights are {ui.human_bytes(weights)} — under this"
+                " pressure a Metal OOM kills the server until restart")
+        if sys.stdin.isatty():
+            try:
+                answer = input("?# Start anyway? [y/N] ").strip().lower()
+            except EOFError:
+                answer = ""
+            if not answer.startswith("y"):
+                ui.ok("cancelled — free memory first (`local-llm stop` kills"
+                      " leftovers)")
+                return 0
+        else:
+            ui.warn("non-interactive — starting anyway")
 
     try:
         servers.start_mlx(cfg, model)
@@ -177,7 +208,9 @@ def cmd_list(cfg: Config) -> int:
     ui.info("💿 Installed models:")
     for rid, size, dling in installed:
         mark = "⬇ " if dling else "  "
-        print(f"  {mark}{rid:<62} {size}  ~{models.ram_need_gb(rid)}GB RAM")
+        ram = models.ram_estimate_gb(rid, size=size)
+        ram_txt = f"~{ram}GB RAM" if ram else "RAM ?"
+        print(f"  {mark}{rid:<62} {size}  {ram_txt}")
     return 0
 
 

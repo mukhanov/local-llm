@@ -57,13 +57,18 @@ _DESCRIPTIONS = (
     ("Llama-3", "Llama 3 series by Meta"),
 )
 
-# rough RAM table (GB) for names without a recognized size
+# rough RAM table (GB) for names without a recognized size; matched on
+# [-_.] word boundaries (a bare "4b" would otherwise match inside "4bit"),
+# longest pattern first ("30B-A3B" must win over "30B")
 _RAM_TABLE = (
-    ("0.5B", 2), ("0.6B", 2), ("1B", 4), ("1.7B", 4), ("3B", 6), ("4B", 6),
+    ("0.5B", 2), ("0.6B", 2), ("1.7B", 4), ("1B", 4), ("3B", 6), ("4B", 6),
     ("7B", 8), ("8B", 8), ("9B", 8), ("14B", 12), ("20B", 16), ("27B", 16),
-    ("30B", 20), ("32B", 20), ("30B-A3B", 24), ("70B", 40), ("235B", 80),
+    ("30B-A3B", 24), ("30B", 20), ("32B", 20), ("70B", 40), ("235B", 80),
     ("gpt-oss-20b", 16),
 )
+_RAM_RES = tuple(
+    (re.compile(rf"(?:^|[-_.]){re.escape(pat.lower())}(?:[-_.]|$)"), gb)
+    for pat, gb in sorted(_RAM_TABLE, key=lambda t: -len(t[0])))
 
 
 def recommend_for_ram(ram: int) -> str:
@@ -118,16 +123,43 @@ def ram_need(total_b, bpp: float):
     return None if total_b is None else total_b * bpp + 1.5
 
 
-def ram_need_gb(mid: str) -> int:
-    """RAM estimate in GB: from the name (params × quant), table as fallback."""
+def ram_need_gb(mid: str) -> int | None:
+    """RAM estimate in GB from the repo name (params × bytes/param + 1.5G
+    headroom); rough table for names without a parseable size, None when
+    the name tells nothing — callers show '?' instead of a guess."""
     total, _active, bpp, *_ = parse_model(mid)
     rn = ram_need(total, bpp)
     if rn is not None:
         return max(1, round(rn))
-    for pat, gb in _RAM_TABLE:
-        if pat in mid:
+    for r, gb in _RAM_RES:
+        if r.search(mid.lower()):
             return gb
-    return 8
+    return None
+
+
+def ram_estimate_gb(mid: str, lf_entry: dict | None = None,
+                    size: str = "") -> int | None:
+    """Best-effort RAM estimate (GB) for listings, honest about ignorance:
+
+    1. the llmfit catalog's recommended_ram_gb (knows exotic quant names)
+    2. repo-name parsing (params × bytes/param, table fallback)
+    3. the weights' actual disk size + ~15% headroom — RAM can't be smaller
+       than the model on disk
+    None: print '?' rather than invent a number."""
+    if lf_entry:
+        n = lf_entry.get("recommended_ram_gb")
+        if isinstance(n, (int, float)) and n > 0:
+            return int(n)
+    rn = ram_need_gb(mid)
+    if rn is not None:
+        return rn
+    if size:
+        m = re.match(r"([\d.]+)\s*([KMG])", size)
+        if m:
+            gb = (float(m.group(1))
+                  * {"K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1.0}[m.group(2)])
+            return max(1, round(gb * 1.15))
+    return None
 
 
 def score(sys_ram: int, mid: str, downloads: int):

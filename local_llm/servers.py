@@ -53,6 +53,17 @@ def _pkill(pattern: str) -> bool:
                           capture_output=True).returncode == 0
 
 
+def _open_log(path: str):
+    """Keep one generation of history: the previous run's log moves to
+    path.1 before the fresh one truncates it — otherwise every restart
+    destroys the evidence of whatever killed the run before it."""
+    try:
+        os.replace(path, path + ".1")
+    except OSError:
+        pass  # no previous log (or unwritable dir) — not fatal
+    return open(path, "wb")
+
+
 def stop_all() -> None:
     """For `local-llm stop`: kill processes leaked from a previous run."""
     ui.info("Stopping servers")
@@ -135,7 +146,7 @@ def start_mlx(cfg, model: str) -> None:
                     "mlx_lm.server — running without it")
     if cfg.prompt_cache_bytes > 0 and "--prompt-cache-bytes" in supported:
         flags += ["--prompt-cache-bytes", str(cfg.prompt_cache_bytes)]
-    log = open(MLX_LOG, "wb")
+    log = _open_log(MLX_LOG)
     env = dict(os.environ)
     # By the time we start mlx, the cache is complete (cli verified it against
     # the repo file list). Force offline: otherwise a partial cache would make
@@ -181,7 +192,7 @@ def start_mlx_small(cfg) -> None:
     env = dict(os.environ)
     env["HF_HUB_OFFLINE"] = "1"
     env["HF_HUB_DISABLE_XET"] = "1"
-    log = open(MLX_SMALL_LOG, "wb")
+    log = _open_log(MLX_SMALL_LOG)
     try:
         proc = subprocess.Popen(
             [python, "-m", "local_llm.mlxwrap",
@@ -240,7 +251,7 @@ def start_litellm(cfg, model: str, small: bool = True) -> None:
     env = dict(os.environ)
     # Anthropic bridge /v1/messages -> chat/completions (mlx has no /v1/responses)
     env["LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES"] = "1"
-    log = open(LITELLM_LOG, "wb")
+    log = _open_log(LITELLM_LOG)
     try:
         proc = subprocess.Popen(
             ["litellm", "--config", str(cfg.litellm_cfg),
@@ -274,6 +285,10 @@ def warmup(cfg) -> None:
         ui.ok("e2e OK")
     except (OSError, urllib.error.URLError) as exc:
         ui.warn(f"warmup failed ({exc})")
+        ui.warn("if it repeats: memory pressure can kill the generation "
+                "thread (Metal OOM -> 404s until restart) — free RAM/swap, "
+                "`local-llm stop`, retry; the previous run's log is "
+                f"{MLX_LOG}.1")
         for path in (MLX_LOG, LITELLM_LOG):
             lines = tail(path, 15)
             if lines:

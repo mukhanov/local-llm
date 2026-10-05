@@ -357,6 +357,13 @@ def _dir_size(root: Path, hub_root: Path | None = None) -> int:
     return size
 
 
+def model_disk_bytes(hf_hub: Path, repo: str) -> int:
+    """Bytes a downloaded model occupies (shared CAS blobs counted once),
+    0 when not on disk — the crash-guard's 'weights are this big' number."""
+    d = model_dir(hf_hub, repo)
+    return _dir_size(d, hf_hub) if d.is_dir() else 0
+
+
 def scan_installed(hf_hub: Path):
     """[(org/repo, human_size, downloading)] — LLMs only: safetensors +
     tokenizer.

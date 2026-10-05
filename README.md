@@ -241,7 +241,7 @@ generation thread — 8-bit keeps a 100GB-class model stable in 128GB RAM.
 | `~/.pi/agent/models.json`             | `pi` model catalog (merged)      |
 | `~/.omp/agent/models.json`            | `omp` model catalog (merged)     |
 | `~/.cache/huggingface/hub`            | downloaded models                |
-| `/tmp/mlx-server.log`, `/tmp/mlx-small.log`, `/tmp/litellm.log` | server logs |
+| `/tmp/mlx-server.log`, `/tmp/mlx-small.log`, `/tmp/litellm.log` | server logs (`.log.1` — the previous run) |
 
 Deleting models (`local-llm rm`) is aware of the hub 1.x shared blob store
 (`hub/blobs/<xx>/<sha>`): it frees the real weights and never touches blobs
@@ -253,7 +253,8 @@ shared with another downloaded model.
   (fake-ip DNS) breaking name resolution. local-llm resolves HuggingFace hosts
   via DoH (1.1.1.1) and pins the result for the session. Plain `curl` from the
   same machine may still fail — that's expected.
-- **Server didn't start** — check `/tmp/mlx-server.log` and `/tmp/litellm.log`;
+- **Server didn't start** — check `/tmp/mlx-server.log` and `/tmp/litellm.log`
+  (`.log.1` holds the previous run's tail — the crash before this one);
   `local-llm stop` cleans up leftover processes.
 - **Interrupted download** — huggingface_hub 1.x does not resume partial files
   across runs. local-llm detects an incomplete model before starting the stack
