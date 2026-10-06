@@ -144,12 +144,14 @@ def run_stack(cfg: Config, model: str) -> int:
             ui.warn("non-interactive — starting anyway")
 
     try:
-        servers.start_mlx(cfg, model)
+        state = {"big": None, "small": None}
+        state["big"] = servers.start_mlx(cfg, model)
         if small_ok:
-            servers.start_mlx_small(cfg)
+            state["small"] = servers.start_mlx_small(cfg)
         servers.start_litellm(cfg, model, small_ok)
         clients.write_client_configs(cfg, model, small_ok)
         servers.warmup(cfg)
+        servers.supervise(cfg, model, state)
         print()
         ui.info(f"Ready. OpenAI and Anthropic APIs on"
                 f" http://127.0.0.1:{cfg.litellm_port}")
@@ -166,6 +168,7 @@ def run_stack(cfg: Config, model: str) -> int:
                     str(cfg.claude_cfg).replace(home, "~"),
                     cfg.mlx_small_port if small_ok else 0)
     finally:
+        servers.stop_watchdog()
         servers.stop_children()
     print()
     ui.ok("stopped — mlx_lm.server and litellm are down")

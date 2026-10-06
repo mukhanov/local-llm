@@ -79,6 +79,14 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   (`⚡98.2 = quality 96 · speed 100 (53 tok/s) · …`), installed models
   included. Sourced from the [llmfit](https://github.com/AlexsJones/llmfit)
   model catalog (MLX-format slice, cached for a week in `~/.ollmlx`).
+- **Self-healing watchdog** — a thread probes the big model with a real
+  1-token completion every 45s (`/v1/models` stays 200 even when the
+  generation thread is dead, so health is measured by generating). A dead
+  process or two failed probes — the post-OOM zombie: a Metal OOM kills
+  the generation thread and every completion 404s until restart — gets
+  both mlx servers restarted in place; litellm and clients keep pointing
+  at the same ports and just see a pause. Restart events appear in the
+  mlx log the monitor shows.
 - **HF token support** — for gated models and API limits; stored outside the
   repo in `~/.ollmlx/hf-token` (chmod 600).
 - **DoH-pinned DNS** — resolves `*.hf.co` via 1.1.1.1 when your TUN proxy
@@ -254,6 +262,12 @@ shared with another downloaded model.
   (fake-ip DNS) breaking name resolution. local-llm resolves HuggingFace hosts
   via DoH (1.1.1.1) and pins the result for the session. Plain `curl` from the
   same machine may still fail — that's expected.
+- **Model dies overnight (404s to everything)** — a Metal OOM: the session
+  grew past the prompt-cache ceiling (16GB ≈ 184k tokens on the 122B-class
+  models; seen with a 186,688-token prompt) and the next cache extension
+  failed the GPU command buffer. The watchdog restarts the model within
+  ~1.5 minutes; keep long sessions `/compact`ed to avoid it. The crashed
+  run's log is `/tmp/mlx-server.log.1`.
 - **Server didn't start** — check `/tmp/mlx-server.log` and `/tmp/litellm.log`
   (`.log.1` holds the previous run's tail — the crash before this one);
   `local-llm stop` cleans up leftover processes.

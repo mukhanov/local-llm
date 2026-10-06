@@ -1,5 +1,6 @@
 """Lifecycle of mlx_lm.server (:8080, OpenAI) and litellm (:4000, OpenAI +
-Anthropic bridge): litellm config, start, readiness wait, warmup, stop.
+Anthropic bridge): litellm config, start, readiness wait, warmup, stop,
+plus a watchdog that restarts mlx after a crash or the post-OOM zombie.
 
 The servers run as foreground children of our process (no nohup/daemons):
 exiting the monitor or Ctrl-C kills everything at once (see cli.run_stack ->
@@ -10,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -82,6 +84,95 @@ def stop_children() -> None:
             p.wait(timeout=10)
         except subprocess.TimeoutExpired:
             p.kill()
+
+
+# --- watchdog --------------------------------------------------------------------
+#
+# mlx dies in two ways: the process exits, or a Metal OOM kills the
+# generation thread while the HTTP server lives on — the post-OOM zombie
+# (seen 2026-10-05 23:58 with a 186k-token session): /v1/models keeps
+# answering 200 and every completion 404s until restarted. The watchdog
+# catches both and brings the model back without user intervention.
+
+_watchdog_stop = threading.Event()
+
+
+def _note(path: str, msg: str) -> None:
+    """An event line in the server's own log — the monitor tails it, so
+    restarts show up on screen without printing over the curses UI."""
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(path, "ab") as f:
+            f.write(f"{stamp} - WATCHDOG - {msg}\n".encode())
+    except OSError:
+        pass
+
+
+def _probe_generation(port: int, model: str, timeout: float = 30.0) -> str:
+    """'ok' | 'bad' | 'busy' — health is a real 1-token completion, not
+    /v1/models (that one stays 200 in the zombie state). 'busy' = no
+    answer in time: mid-prefill of a huge prompt, not proof of anything."""
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps({"model": model, "max_tokens": 1, "stream": False,
+                         "messages": [{"role": "user", "content": "ping"}]}
+                        ).encode(),
+        headers={"content-type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            r.read()
+        return "ok"
+    except urllib.error.HTTPError:
+        return "bad"     # 404/500 — the zombie signature
+    except (OSError, urllib.error.URLError):
+        return "busy"
+
+
+def supervise(cfg, model: str, state: dict, interval: float = 45.0) -> None:
+    """Start the watchdog thread. `state` = {"big": Popen, "small": Popen|None};
+    on a dead process or 2 consecutive bad probes it restarts both mlx
+    servers in place — litellm and the client configs keep pointing at the
+    same ports, so clients just see a pause."""
+    _watchdog_stop.clear()
+
+    def restart(reason: str) -> None:
+        _pkill(_MLX_PATTERN)   # takes the helper down too; it comes right back
+        time.sleep(1)
+        try:
+            state["big"] = start_mlx(cfg, model)
+            if state["small"] is not None:
+                state["small"] = start_mlx_small(cfg)
+            # noted after start_mlx — its _open_log rotates the log, and the
+            # reason must not be rotated away from the fresh log
+            _note(MLX_LOG, f"mlx restarted ({reason}) — stack healthy again")
+        except SystemExit as exc:
+            _note(MLX_LOG, f"restart failed ({reason}): {exc}")
+
+    def run():
+        bad = 0
+        while not _watchdog_stop.wait(interval):
+            big = state.get("big")
+            if big is None or big.poll() is not None:
+                code = big.returncode if big is not None else "?"
+                restart(f"process exited (code {code})")
+                bad = 0
+                continue
+            if _probe_generation(cfg.mlx_port, model) == "bad":
+                bad += 1
+                if bad >= 2:
+                    restart("generation thread dead — completions 404"
+                            " (Metal OOM zombie)")
+                    bad = 0
+            else:
+                bad = 0
+
+    threading.Thread(target=run, daemon=True, name="mlx-watchdog").start()
+
+
+def stop_watchdog() -> None:
+    """Signal the watchdog to stand down before stop_children() — no
+    restarts during shutdown."""
+    _watchdog_stop.set()
 
 
 def ensure_litellm() -> None:
@@ -168,6 +259,7 @@ def start_mlx(cfg, model: str) -> None:
     children.append(proc)
     _wait_ready(f"http://127.0.0.1:{cfg.mlx_port}/v1/models", proc,
                 cfg.load_timeout, MLX_LOG, "mlx_lm.server")
+    return proc
 
 
 def start_mlx_small(cfg) -> None:
@@ -205,6 +297,7 @@ def start_mlx_small(cfg) -> None:
     children.append(proc)
     _wait_ready(f"http://127.0.0.1:{cfg.mlx_small_port}/v1/models", proc,
                 120, MLX_SMALL_LOG, "helper model")
+    return proc
 
 
 def _write_litellm_config(cfg, model: str, small: bool = True) -> None:
