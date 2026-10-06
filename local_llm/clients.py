@@ -56,8 +56,14 @@ def _entry(mid: str, name: str, ctx: int, reasoning: bool) -> dict:
     }
 
 
-def write_client_configs(cfg, model: str, small: bool = True) -> None:
-    ctx = hf.model_ctx(cfg.hf_hub, model)
+def write_client_configs(cfg, model: str, small: bool = True,
+                         max_input: int | None = None) -> None:
+    # the advertised context is the KV-safe budget, not the config.json
+    # maximum: past the prompt-cache ceiling the model dies on the next
+    # cache extension (Metal OOM), so clients must compact earlier
+    if max_input is None:
+        max_input = hf.safe_context(cfg.hf_hub, model, cfg.prompt_cache_bytes)
+    ctx = max_input
     reasoning = "Qwen3" in model
     ui.info("Writing client configs")
 

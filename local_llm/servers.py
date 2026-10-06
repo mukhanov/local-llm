@@ -131,18 +131,28 @@ def _probe_generation(port: int, model: str, timeout: float = 30.0) -> str:
         return "busy"
 
 
-def supervise(cfg, model: str, state: dict, interval: float = 45.0) -> None:
+def supervise(cfg, model: str, state: dict, interval: float = 45.0,
+              loop_window: float = 600.0, loop_max: int = 3,
+              backoff: float = 600.0,
+              max_input: int | None = None) -> None:
     """Start the watchdog thread. `state` = {"big": Popen, "small": Popen|None};
     on a dead process or 2 consecutive bad probes it restarts both mlx
     servers in place — litellm and the client configs keep pointing at the
-    same ports, so clients just see a pause."""
+    same ports, so clients just see a pause.
+
+    loop_max restarts within loop_window = the client session is bigger
+    than this machine can serve (every restart the client resends its full
+    context and the model OOMs again) — probing slows to `backoff` and a
+    note in the watchdog log says to compact the session. Restarts never
+    stop; when the window drains, normal cadence resumes."""
     _watchdog_stop.clear()
+    restarts: list[float] = []
 
     def restart(reason: str) -> None:
         _pkill(_MLX_PATTERN)   # takes the helper down too; it comes right back
         time.sleep(1)
         try:
-            state["big"] = start_mlx(cfg, model)
+            state["big"] = start_mlx(cfg, model, max_input)
             if state["small"] is not None:
                 state["small"] = start_mlx_small(cfg)
             _note(f"mlx restarted ({reason}) — stack healthy again")
@@ -151,21 +161,43 @@ def supervise(cfg, model: str, state: dict, interval: float = 45.0) -> None:
 
     def run():
         bad = 0
-        while not _watchdog_stop.wait(interval):
+        iv = interval
+        loop_mode = False
+        while not _watchdog_stop.wait(iv):
+            now = time.monotonic()
+            while restarts and now - restarts[0] > loop_window:
+                restarts.pop(0)
+
             big = state.get("big")
-            if big is None or big.poll() is not None:
-                code = big.returncode if big is not None else "?"
-                restart(f"process exited (code {code})")
-                bad = 0
-                continue
-            if _probe_generation(cfg.mlx_port, model) == "bad":
-                bad += 1
-                if bad >= 2:
-                    restart("generation thread dead — completions 404"
-                            " (Metal OOM zombie)")
+            dead = big is None or big.poll() is not None
+            if not dead:
+                if _probe_generation(cfg.mlx_port, model) != "bad":
                     bad = 0
+                    continue
+                bad += 1
+                if bad < 2:
+                    continue
+                reason = ("generation thread dead — completions 404"
+                          " (Metal OOM zombie)")
             else:
-                bad = 0
+                reason = (f"process exited (code "
+                          f"{big.returncode if big is not None else '?'})")
+
+            restarts.append(now)
+            if len(restarts) >= loop_max and not loop_mode:
+                loop_mode = True
+                iv = backoff
+                _note(f"{len(restarts)} restarts in {loop_window / 60:.0f} min —"
+                      " the client session is likely too big for this machine:"
+                      " compact it (/compact) or start a fresh one. Backing off"
+                      f" to a probe every {backoff / 60:.0f} min; restarts"
+                      " continue")
+            restart(reason)
+            bad = 0
+            if loop_mode and len(restarts) < loop_max:
+                loop_mode = False
+                iv = interval
+                _note("no crashes in a while — back to normal probing")
 
     threading.Thread(target=run, daemon=True, name="mlx-watchdog").start()
 
@@ -218,7 +250,7 @@ def _server_flags(python: str) -> set[str]:
             if w.startswith("--")}
 
 
-def start_mlx(cfg, model: str) -> None:
+def start_mlx(cfg, model: str, max_input: int | None = None) -> None:
     ui.info(f"Starting mlx_lm.server on :{cfg.mlx_port}")
     _pkill(_MLX_PATTERN)
     time.sleep(1)
@@ -246,6 +278,10 @@ def start_mlx(cfg, model: str) -> None:
     # token — which stalls for hours while /v1/models already answers 200.
     env["HF_HUB_OFFLINE"] = "1"
     env["HF_HUB_DISABLE_XET"] = "1"
+    if max_input:
+        # mlxwrap refuses longer prompts before the KV eval — the OOM that
+        # kills the generation thread never happens
+        env["OLLMLX_MAX_INPUT_TOKENS"] = str(max_input)
     if cfg.hf_token:
         env["HF_TOKEN"] = cfg.hf_token
     try:

@@ -476,3 +476,65 @@ def model_ctx(hf_hub: Path, repo: str) -> int:
         if r:
             return r
     return 32768
+
+
+def _config_of(hf_hub: Path, repo: str):
+    """The model's parsed config.json, or None."""
+    for snap in (model_dir(hf_hub, repo) / "snapshots").glob("*"):
+        cfg = snap / "config.json"
+        if cfg.is_file():
+            try:
+                return json.loads(cfg.read_text())
+            except Exception:
+                return None
+    return None
+
+
+def _dig(d, *keys):
+    """First numeric value of `keys` anywhere in the config tree (top level,
+    then text_config / nested blocks — MoE vision models nest the LM)."""
+    for k in keys:
+        if isinstance(d.get(k), (int, float)) and d.get(k):
+            return d[k]
+    for v in d.values():
+        if isinstance(v, dict):
+            r = _dig(v, *keys)
+            if r:
+                return r
+    return None
+
+
+def model_kv_per_token(hf_hub: Path, repo: str) -> float | None:
+    """KV-cache bytes per token: 2 (K and V) x num_key_value_heads x
+    head_dim x num_hidden_layers x 2 bytes (fp16). Verified against the
+    field: a 122B at this formula's 96KB/token hit its 16GB cache ceiling
+    at 183,993 tokens (91.2KB/token effective). None when config.json
+    doesn't say."""
+    c = _config_of(hf_hub, repo)
+    if not c:
+        return None
+    layers = _dig(c, "num_hidden_layers")
+    heads = _dig(c, "num_attention_heads")
+    kvh = _dig(c, "num_key_value_heads") or heads
+    hd = _dig(c, "head_dim")
+    if hd is None and heads and _dig(c, "hidden_size"):
+        hd = _dig(c, "hidden_size") / heads
+    if not all(isinstance(x, (int, float)) and x for x in (layers, kvh, hd)):
+        return None
+    return 2 * kvh * hd * layers * 2
+
+
+def safe_context(hf_hub: Path, repo: str, prompt_cache_bytes: int) -> int:
+    """The context this model can actually serve on this machine: the
+    config's window clamped to what fits the prompt-cache budget with 10%
+    headroom (a session past the ceiling dies on the next cache extension —
+    Metal command-buffer OOM, the generation thread is gone). Advertised to
+    clients so they compact BEFORE the model dies. Unclamped when the KV
+    size is unknown or the cache is unlimited."""
+    ctx = model_ctx(hf_hub, repo)
+    if not prompt_cache_bytes:
+        return ctx
+    kv = model_kv_per_token(hf_hub, repo)
+    if not kv:
+        return ctx
+    return max(4096, min(ctx, int(prompt_cache_bytes / kv * 0.9)))

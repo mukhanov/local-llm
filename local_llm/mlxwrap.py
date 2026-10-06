@@ -16,6 +16,7 @@ Line formats (kept short and stable — the monitor parses them):
 """
 import importlib
 import importlib.util
+import os
 import sys
 import threading
 import time
@@ -122,10 +123,22 @@ def _counting(ctx, inner):
 
 def _install_hook() -> None:
     orig_generate = mlxs.ResponseGenerator.generate
+    # KV budget for this machine (tokens); 0 = unlimited. Set by servers.
+    # start_mlx from safe_context(). Past it the prompt eval OOMs the Metal
+    # command buffer and kills the generation thread — the whole server
+    # 404s until restarted. Refusing the request keeps the server alive.
+    max_input = int(os.environ.get("OLLMLX_MAX_INPUT_TOKENS", "0") or 0)
 
     def generate(self, request, generation_args, progress_callback=None):
         ctx, inner = orig_generate(
             self, request, generation_args, _prefill_cb(progress_callback))
+        # raised before the first mx.eval (tokenized only so far) — the
+        # handler thread drops the request, the generation thread lives
+        n = len(getattr(ctx, "prompt", ()) or ())
+        if max_input and n > max_input:
+            raise ValueError(
+                f"context too long: {n} tokens > {max_input} (the KV budget"
+                " of this machine) — compact the session and retry")
         return ctx, _counting(ctx, inner)
 
     mlxs.ResponseGenerator.generate = generate

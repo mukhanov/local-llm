@@ -61,7 +61,12 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   downloaded, the stack degrades to everything-on-the-big-model instead of
   failing.
 - **Client config writer** — registers the model in `pi` and `omp` model
-  catalogs and generates a Claude Code settings file.
+  catalogs and generates a Claude Code settings file. The advertised
+  `contextWindow` is the KV-safe budget (prompt-cache bound, ~10%
+  headroom), not the config.json maximum — pi/omp compact *before* the
+  model dies. Oversized requests that slip through are refused by the
+  server itself with a clean "context too long" error instead of the
+  Metal OOM that used to kill the generation thread.
 - **System monitor** — htop-style curses UI: the model's live tokens/sec
   (decode rate + a history graph, prefill rate while it reads your prompt),
   per-core CPU + history graph, RAM/swap, server status, process RSS,
@@ -85,8 +90,12 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   process or two failed probes — the post-OOM zombie: a Metal OOM kills
   the generation thread and every completion 404s until restart — gets
   both mlx servers restarted in place; litellm and clients keep pointing
-  at the same ports and just see a pause. Restart events appear in the
-  mlx log the monitor shows.
+  at the same ports and just see a pause. Restart events appear in
+  `/tmp/mlx-watchdog.log` (the monitor shows them too). 3 restarts in
+  10 minutes — a client session bigger than the machine can serve,
+  resending its full context after every restart — switch the watchdog
+  to a probe every 10 min with a note to compact the session; restarts
+  continue, normal cadence resumes once the crashes age out.
 - **HF token support** — for gated models and API limits; stored outside the
   repo in `~/.ollmlx/hf-token` (chmod 600).
 - **DoH-pinned DNS** — resolves `*.hf.co` via 1.1.1.1 when your TUN proxy
@@ -265,9 +274,11 @@ shared with another downloaded model.
 - **Model dies overnight (404s to everything)** — a Metal OOM: the session
   grew past the prompt-cache ceiling (16GB ≈ 184k tokens on the 122B-class
   models; seen with a 186,688-token prompt) and the next cache extension
-  failed the GPU command buffer. The watchdog restarts the model within
-  ~1.5 minutes; keep long sessions `/compact`ed to avoid it. The crashed
-  run's log is `/tmp/mlx-server.log.1`.
+  failed the GPU command buffer. Two defenses now: requests past the KV
+  budget are refused with "context too long" before any eval, and the
+  watchdog restarts the model within ~1.5 minutes if it dies anyway
+  (backing off if it dies repeatedly). Keep long sessions `/compact`ed.
+  The crashed run's log is `/tmp/mlx-server.log.1`.
 - **Server didn't start** — check `/tmp/mlx-server.log` and `/tmp/litellm.log`
   (`.log.1` holds the previous run's tail — the crash before this one);
   `local-llm stop` cleans up leftover processes.

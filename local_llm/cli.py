@@ -145,13 +145,18 @@ def run_stack(cfg: Config, model: str) -> int:
 
     try:
         state = {"big": None, "small": None}
-        state["big"] = servers.start_mlx(cfg, model)
+        max_input = hf.safe_context(cfg.hf_hub, model, cfg.prompt_cache_bytes)
+        if max_input < hf.model_ctx(cfg.hf_hub, model):
+            ui.info(f"model context capped at {max_input} tokens"
+                    " (prompt-cache budget) — oversized requests are refused,"
+                    " clients compact before it OOMs")
+        state["big"] = servers.start_mlx(cfg, model, max_input)
         if small_ok:
             state["small"] = servers.start_mlx_small(cfg)
         servers.start_litellm(cfg, model, small_ok)
-        clients.write_client_configs(cfg, model, small_ok)
+        clients.write_client_configs(cfg, model, small_ok, max_input)
         servers.warmup(cfg)
-        servers.supervise(cfg, model, state)
+        servers.supervise(cfg, model, state, max_input=max_input)
         print()
         ui.info(f"Ready. OpenAI and Anthropic APIs on"
                 f" http://127.0.0.1:{cfg.litellm_port}")
