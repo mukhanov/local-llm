@@ -220,7 +220,10 @@ very bottom a full-width box with the latest errors and log tails from
 box grows with the terminal and its tail hugs the bottom border. The two
 graphs and all boxes follow the same left/right column grid. The logs
 scroll — `↑/↓` line by line, `PgUp/PgDn` by pages, the frame title shows
-the distance from live, `End`/`G` returns to the tail. Press `q`
+the distance from live, `End`/`G` returns to the tail. When free memory
+drops under 10 GB the MEM bar pulses red with an `⚠ OOM risk` warning
+(that pressure is what OOMs the model), and a `top mem (kill <pid>)`
+line names the heaviest third-party apps. Press `q`
 (or Ctrl-C) to stop the whole stack.
 
 The tok/s numbers come from a thin wrapper around `mlx_lm.server`

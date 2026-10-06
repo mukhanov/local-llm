@@ -80,6 +80,36 @@ def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str,
     # pushed at startup and pops at exit), not to the monitor
 
 
+LOW_AVAILABLE_GB = 10   # MEM bar pulses red with a warning below this
+
+
+def _low_mem(vm) -> bool:
+    """True when free memory is low enough that a Metal eval can OOM the
+    model — the condition behind every generation-thread death so far."""
+    return vm.available < LOW_AVAILABLE_GB * 1024 ** 3
+
+
+def top_eaters(k: int = 3, exclude_pids=()) -> list:
+    """Top-k third-party processes by RSS as (rss, pid, name) — the kill
+    candidates under memory pressure. Our own mlx/litellm processes are
+    excluded: they are listed separately with their own RSS."""
+    me = os.getpid()
+    best = []
+    for p in psutil.process_iter(["pid", "name", "memory_info"]):
+        try:
+            info = p.info
+            if info["pid"] in (0, me) or info["pid"] in exclude_pids:
+                continue
+            rss = info["memory_info"].rss if info["memory_info"] else 0
+            if rss < 300 * 1024 * 1024:   # sub-300MB is not a lever
+                continue
+            best.append((rss, info["pid"], os.path.basename(info["name"] or "?")))
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    best.sort(reverse=True)
+    return best[:k]
+
+
 def port_ok(port: int) -> bool:
     try:
         with socket.socket() as s:
@@ -275,12 +305,14 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
             add(y[0], 0, text, attr)
             y[0] += 1
 
-        def put_bar(yy, xx, label, bw, frac, suffix="", attr=0):
+        def put_bar(yy, xx, label, bw, frac, suffix="", attr=0, fill=None):
             """label[███ filled with color, dim background] suffix — only
             glyphs present in any terminal font (no ░/▁▂▃)."""
             f = int(bw * max(0.0, min(1.0, frac)) + 0.5)
             add(yy, xx, label)
-            add(yy, xx + len(label), "█" * f, curses.color_pair(heat(frac * 100)))
+            add(yy, xx + len(label), "█" * f,
+                fill if fill is not None
+                else curses.color_pair(heat(frac * 100)))
             add(yy, xx + len(label) + f, "█" * (bw - f), curses.A_DIM)
             if suffix:
                 add(yy, xx + len(label) + bw, suffix, attr)
@@ -509,24 +541,43 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
             box_bottom(gy + 1 + n_proc, rx, rw)
 
         # --- RAM/swap bars right below the boxes; clamped so they never
-        # run onto the q hint row on terminals too short for everything ---
+        # run onto the q hint row on terminals too short for everything.
+        # Available memory under LOW_AVAILABLE_GB pulses the MEM bar red —
+        # that pressure is what OOMs the model (seen 2026-10-05/06). ---
         ended = max(n_cli, n_proc)
         by = gy + ended + 2 if ended else gy
-        by = min(by, usable - (2 if sw.total else 1))
+        bars = 2 if sw.total else 1
+        by = min(by, usable - bars - 1)   # + the top-mem line below the bars
         bw_b = max(8, w - 30)    # room for "]  77%  95.1G/128.0G"
-        put_bar(by, 0, " MEM [", bw_b, vm.percent / 100,
-                f"] {vm.percent:3.0f}%"
-                f"  {ui.human_bytes(vm.used)}/{ui.human_bytes(vm.total)}")
+        low_mem = _low_mem(vm)
+        pulse = curses.A_BOLD if int(time.time()) % 2 else curses.A_REVERSE
+        mem_suffix = (f"] {vm.percent:3.0f}%  ⚠ OOM risk: "
+                      f"{ui.human_bytes(vm.available)} free" if low_mem else
+                      f"] {vm.percent:3.0f}%"
+                      f"  {ui.human_bytes(vm.used)}/{ui.human_bytes(vm.total)}")
+        put_bar(by, 0, " MEM [", bw_b - (18 if low_mem else 0),
+                vm.percent / 100, mem_suffix,
+                curses.color_pair(3) if low_mem else B,
+                curses.color_pair(3) | pulse if low_mem else None)
         if sw.total:
             put_bar(by + 1, 0, " SWP [", bw_b, sw.percent / 100,
                     f"] {sw.percent:3.0f}%"
                     f"  {ui.human_bytes(sw.used)}/{ui.human_bytes(sw.total)}")
 
+        # heaviest third-party apps — the kill candidates under pressure
+        eaters = top_eaters(3, {p.pid for _, p in procs})
+        if eaters:
+            txt = " · ".join(f"{name} {ui.human_bytes(rss)}({pid})"
+                             for rss, pid, name in eaters)
+            add(by + bars, 0,
+                clip(f" top mem (kill <pid>): {txt}", w - 1),
+                curses.color_pair(3) if low_mem else curses.A_DIM)
+
         # --- logs: the very bottom box, its tail sitting just above the
         # bottom border; grows/shrinks with the terminal. ↑/↓ PgUp/PgDn
         # scroll back into history (the frame title shows the distance
         # from live), End/G returns to the live tail. ---
-        lt = by + (2 if sw.total else 1) + 1
+        lt = by + bars + (2 if eaters else 1)
         height = usable - lt                 # rows incl. top/bottom borders
         errs = [(tag, l) for tag, path in LOGS for l in tail_errors(path)][-3:]
         log_rows = [(f"[{tag}] {l}", curses.color_pair(3)) for tag, l in errs]
