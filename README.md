@@ -87,6 +87,9 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   (`⚡98.2 = quality 96 · speed 100 (53 tok/s) · …`), installed models
   included. Sourced from the [llmfit](https://github.com/AlexsJones/llmfit)
   model catalog (MLX-format slice, cached for a week in `~/.ollmlx`).
+  After `Enter` a fullscreen startup dialog takes over — spinner + live
+  boot log (download progress, server readiness) instead of scrolling
+  text — and hands off straight to the monitor.
 - **Self-healing watchdog** — a thread probes the big model with a real
   1-token completion every 45s (`/v1/models` stays 200 even when the
   generation thread is dead, so health is measured by generating). A dead

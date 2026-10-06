@@ -1,11 +1,13 @@
 """Commands and orchestration: run / stop / rm / list / help."""
 import os
+import queue
 import sys
+import threading
 from pathlib import Path
 
 import psutil
 
-from . import clients, hf, models, monitor, picker, servers, ui
+from . import clients, hf, models, monitor, picker, servers, startup, ui
 from .config import Config
 
 USAGE = """\
@@ -51,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
         if model is None:
             ui.warn("selection cancelled — exiting")
             return 0
+        if sys.stdout.isatty() and sys.stdin.isatty():
+            return run_stack_dialog(cfg, model)
         return run_stack(cfg, model)
     cmd, rest = argv[0], argv[1:]
     if cmd == "stop":
@@ -72,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     return run_stack(cfg, model)
 
 
-def run_stack(cfg: Config, model: str) -> int:
+def run_stack(cfg: Config, model: str, launch_monitor: bool = True) -> int:
     # a port collision is a config error — fail before touching anything
     # (the second server would die on bind and _wait_ready would kill the run)
     if (cfg.mlx_port == cfg.mlx_small_port
@@ -132,7 +136,7 @@ def run_stack(cfg: Config, model: str) -> int:
         ui.warn(f"only {ui.human_bytes(avail)} RAM available, the model's"
                 f" weights are {ui.human_bytes(weights)} — under this"
                 " pressure a Metal OOM kills the server until restart")
-        if sys.stdin.isatty():
+        if launch_monitor and sys.stdin.isatty():
             try:
                 answer = input("?# Start anyway? [y/N] ").strip().lower()
             except EOFError:
@@ -142,7 +146,7 @@ def run_stack(cfg: Config, model: str) -> int:
                       " leftovers)")
                 return 0
         else:
-            ui.warn("non-interactive — starting anyway")
+            ui.warn("non-interactive start — continuing")
 
     try:
         state = {"big": None, "small": None}
@@ -169,11 +173,76 @@ def run_stack(cfg: Config, model: str) -> int:
             print(f"  fast/bg: ollmlx/small  ({cfg.small_model} on"
                   f" :{cfg.mlx_small_port} — titles, quick asks)")
         print()
+        if not launch_monitor:
+            # handoff: the caller keeps the stack running and opens the UI
+            return cfg.mlx_small_port if small_ok else 0
         ui.info("System monitor (q or Ctrl-C stops everything)")
         home = str(Path.home())
         monitor.run(model, cfg.mlx_port, cfg.litellm_port,
                     str(cfg.claude_cfg).replace(home, "~"),
                     cfg.mlx_small_port if small_ok else 0)
+    finally:
+        if launch_monitor:
+            servers.stop_watchdog()
+            servers.stop_children()
+    print()
+    ui.ok("stopped — mlx_lm.server and litellm are down")
+    return 0
+
+
+def run_stack_dialog(cfg: Config, model: str) -> int:
+    """Picker -> fullscreen startup dialog -> straight into the monitor.
+    The stack boots in a worker thread with its output fed to the dialog;
+    on success the dialog hands the terminal to the monitor, on failure it
+    waits for a keypress over the error."""
+    lines: "queue.Queue[str]" = queue.Queue()
+    done = threading.Event()
+    result: dict = {}
+
+    def work():
+        old = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = startup.QueueWriter(lines)
+        try:
+            result["handoff"] = run_stack(cfg, model, launch_monitor=False)
+            result["code"] = 0
+        except SystemExit as exc:
+            result["code"] = exc.code if isinstance(exc.code, int) else 1
+            if exc.code and not isinstance(exc.code, int):
+                result["error"] = str(exc.code)
+        except KeyboardInterrupt:
+            result["code"] = 130
+        except BaseException as exc:  # noqa: BLE001 — surfaced in the dialog
+            result["code"] = 1
+            result["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            sys.stdout, sys.stderr = old
+            if result.get("code"):
+                # failed — nothing to hand off, take the servers down
+                servers.stop_watchdog()
+                servers.stop_children()
+            done.set()
+
+    worker = threading.Thread(target=work, name="stack-start", daemon=True)
+    worker.start()
+    try:
+        startup.dialog(model, lines, done, result)
+    except KeyboardInterrupt:
+        ui.warn("interrupted — stopping the stack")
+        servers.stop_watchdog()
+        servers.stop_children()
+        worker.join(timeout=15)
+        return 130
+    worker.join(timeout=15)
+    code = result.get("code", 1)
+    if code:
+        if result.get("error"):
+            ui.warn(result["error"])
+        raise SystemExit(code)
+    try:
+        home = str(Path.home())
+        monitor.run(model, cfg.mlx_port, cfg.litellm_port,
+                    str(cfg.claude_cfg).replace(home, "~"),
+                    result.get("handoff", 0))
     finally:
         servers.stop_watchdog()
         servers.stop_children()
