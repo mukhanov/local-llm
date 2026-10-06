@@ -23,6 +23,37 @@ from .servers import MLX_SMALL_LOG, WATCHDOG_LOG
 LOGS = (("mlx", "/tmp/mlx-server.log"), ("litellm", "/tmp/litellm.log"))
 
 
+class _UiSink:
+    """Captures stray prints while the curses UI owns the terminal (watchdog
+    restarts, readiness ticks) and appends them to the watchdog log — the
+    logs box tails it, so the events stay visible instead of scribbling
+    over the screen."""
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def write(self, s):
+        lines = [l.strip() for l in re.sub(
+            r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)",
+            "", s).splitlines()]
+        stamp = time.strftime("%H:%M:%S")
+        for line in lines:
+            if not line:
+                continue
+            try:
+                with open(self.path, "a") as f:
+                    f.write(f"{stamp} [ui] {line}\n")
+            except OSError:
+                pass
+        return len(s)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
 def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str,
         small_port: int = 0) -> None:
     """Blocks until exit (q / Ctrl-C). small_port=0 — no helper model."""
@@ -32,11 +63,19 @@ def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str,
     LOGS = LOGS + (("watchdog", WATCHDOG_LOG),)
     ui.force_utf8_locale()
     ui.force_compatible_term()
+    # while the curses UI owns the screen, stray prints must not reach the
+    # terminal (a watchdog restart printing "ready in 3s" over the grid
+    # shredded the display) — route them into the watchdog log instead
+    sink = _UiSink(WATCHDOG_LOG)
+    old = sys.stdout, sys.stderr
+    sys.stdout = sys.stderr = sink
     try:
         curses.wrapper(lambda scr: _main(
             scr, model, mlx_port, lite_port, claude_cfg, small_port))
     except KeyboardInterrupt:
         pass
+    finally:
+        sys.stdout, sys.stderr = old
     # the tab title's save/restore belongs to the app level (cli.main
     # pushed at startup and pops at exit), not to the monitor
 
@@ -77,11 +116,13 @@ def heat(pct: float) -> int:  # green -> yellow -> red
 def _set_title(text: str) -> None:
     """Name the terminal tab (OSC 0, like Claude Code names its session).
     Written straight to the tty — curses manages only the screen grid, so
-    the sequence passes through untouched."""
+    the sequence passes through untouched. Uses the original stdout: while
+    the monitor runs, sys.stdout is redirected to the watchdog log."""
     try:
-        sys.stdout.write(f"\x1b]0;{text}\x07")
-        sys.stdout.flush()
-    except OSError:
+        out = sys.__stdout__ or sys.stdout
+        out.write(f"\x1b]0;{text}\x07")
+        out.flush()
+    except (OSError, ValueError):
         pass
 
 

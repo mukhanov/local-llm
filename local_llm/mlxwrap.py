@@ -16,6 +16,8 @@ Line formats (kept short and stable — the monitor parses them):
 """
 import importlib
 import importlib.util
+import copy
+import json
 import os
 import sys
 import threading
@@ -166,6 +168,20 @@ def _trim_to_fit(messages, target_chars):
     return trimmed if len(trimmed) < len(messages) else None
 
 
+def _restore_tool_args(messages):
+    """mlx_lm.server's process_message_content runs in place and re-parses
+    tool_call arguments on every pass (str -> dict). Our verification pass
+    re-tokenizes the same conversation, so it would feed already-parsed
+    dicts back into json.loads and die with 'the JSON object must be str,
+    bytes or bytearray'. Serialize them back before re-submitting."""
+    for m in messages:
+        for tc in m.get("tool_calls") or []:
+            func = tc.get("function") or {}
+            args = func.get("arguments")
+            if isinstance(args, (dict, list)):
+                func["arguments"] = json.dumps(args, ensure_ascii=False)
+
+
 def _install_hook() -> None:
     orig_generate = mlxs.ResponseGenerator.generate
     # KV budget for this machine (tokens); 0 = unlimited. Set by servers.
@@ -194,6 +210,10 @@ def _install_hook() -> None:
                     trimmed = _trim_to_fit(messages, target_chars)
                     if trimmed is None:
                         break
+                    # private copies: the worker's pass-1 processing mutates
+                    # the original dicts in place (tool arguments str->dict),
+                    # and shared dicts would re-crash on the second pass
+                    trimmed = copy.deepcopy(trimmed)
                     dropped = len(messages) - len(trimmed)
                     # honest to the model: without this note it would
                     # confidently answer about context it no longer has
@@ -205,6 +225,7 @@ def _install_hook() -> None:
                             f"[{dropped} oldest messages of this conversation"
                             " were dropped to fit the context budget; earlier"
                             " details are unavailable.]\n" + content)
+                    _restore_tool_args(trimmed)
                     request.messages = trimmed
                     _emit(f"trim attempt: sending {len(trimmed)} of "
                           f"{orig_len} messages (dropped {dropped})")

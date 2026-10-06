@@ -44,29 +44,33 @@ def force_compatible_term() -> None:
 
 def push_title() -> None:
     """Save the terminal tab title (xterm stack) — pair with pop_title() at
-    exit so the user's own title comes back."""
+    exit so the user's own title comes back. Writes to the original stdout
+    so a redirected sys.stdout can't swallow it."""
     try:
-        sys.stdout.write("\x1b[22t")
-        sys.stdout.flush()
-    except OSError:
+        out = sys.__stdout__ or sys.stdout
+        out.write("\x1b[22t")
+        out.flush()
+    except (OSError, ValueError):
         pass
 
 
 def set_title(text: str) -> None:
     """Name the terminal tab right away (OSC 0)."""
     try:
-        sys.stdout.write(f"\x1b]0;{text}\x07")
-        sys.stdout.flush()
-    except OSError:
+        out = sys.__stdout__ or sys.stdout
+        out.write(f"\x1b]0;{text}\x07")
+        out.flush()
+    except (OSError, ValueError):
         pass
 
 
 def pop_title() -> None:
     """Restore the title saved by push_title()."""
     try:
-        sys.stdout.write("\x1b[23t")
-        sys.stdout.flush()
-    except OSError:
+        out = sys.__stdout__ or sys.stdout
+        out.write("\x1b[23t")
+        out.flush()
+    except (OSError, ValueError):
         pass
 
 
