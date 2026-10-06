@@ -18,7 +18,7 @@ import time
 import psutil
 
 from . import ui
-from .servers import MLX_SMALL_LOG
+from .servers import MLX_SMALL_LOG, WATCHDOG_LOG
 
 LOGS = (("mlx", "/tmp/mlx-server.log"), ("litellm", "/tmp/litellm.log"))
 
@@ -29,6 +29,7 @@ def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str,
     global LOGS
     if small_port:
         LOGS = LOGS + (("mlx-small", MLX_SMALL_LOG),)
+    LOGS = LOGS + (("watchdog", WATCHDOG_LOG),)
     ui.force_utf8_locale()
     ui.force_compatible_term()
     try:
@@ -522,8 +523,9 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
             box_bottom(lt + height - 1, 0, w - 1)
 
         logs = ("/tmp/mlx-server.log, /tmp/mlx-small.log, /tmp/litellm.log"
+                ", /tmp/mlx-watchdog.log"
                 if small_port else
-                "/tmp/mlx-server.log, /tmp/litellm.log")
+                "/tmp/mlx-server.log, /tmp/litellm.log, /tmp/mlx-watchdog.log")
         add(h - 1, 0, f" q — quit | logs: {logs}", curses.A_DIM)
         stdscr.refresh()
 

@@ -22,6 +22,7 @@ from . import hf, ui
 MLX_LOG = "/tmp/mlx-server.log"
 MLX_SMALL_LOG = "/tmp/mlx-small.log"
 LITELLM_LOG = "/tmp/litellm.log"
+WATCHDOG_LOG = "/tmp/mlx-watchdog.log"
 
 # Popen handles of live children — killed in stop_children()
 children: list[subprocess.Popen] = []
@@ -97,13 +98,15 @@ def stop_children() -> None:
 _watchdog_stop = threading.Event()
 
 
-def _note(path: str, msg: str) -> None:
-    """An event line in the server's own log — the monitor tails it, so
-    restarts show up on screen without printing over the curses UI."""
+def _note(msg: str) -> None:
+    """An event line in the watchdog's own log — the monitor tails it.
+    NOT the mlx log: the server child holds that file at its own non-append
+    offset and overwrites whatever anyone else appends after it (the
+    13:19:35 restart note was lost exactly this way)."""
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     try:
-        with open(path, "ab") as f:
-            f.write(f"{stamp} - WATCHDOG - {msg}\n".encode())
+        with open(WATCHDOG_LOG, "a") as f:
+            f.write(f"{stamp} - WATCHDOG - {msg}\n")
     except OSError:
         pass
 
@@ -142,11 +145,9 @@ def supervise(cfg, model: str, state: dict, interval: float = 45.0) -> None:
             state["big"] = start_mlx(cfg, model)
             if state["small"] is not None:
                 state["small"] = start_mlx_small(cfg)
-            # noted after start_mlx — its _open_log rotates the log, and the
-            # reason must not be rotated away from the fresh log
-            _note(MLX_LOG, f"mlx restarted ({reason}) — stack healthy again")
+            _note(f"mlx restarted ({reason}) — stack healthy again")
         except SystemExit as exc:
-            _note(MLX_LOG, f"restart failed ({reason}): {exc}")
+            _note(f"restart failed ({reason}): {exc}")
 
     def run():
         bad = 0
