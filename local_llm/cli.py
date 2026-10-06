@@ -47,13 +47,27 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in ("-h", "--help", "help"):
         print(USAGE)
         return 0
+    interactive = sys.stdout.isatty() and sys.stdin.isatty()
+    if interactive:
+        # the tab title is owned by the whole app run: set it the moment we
+        # start, hand it back exactly once at exit
+        ui.push_title()
+        ui.set_title("🟢 ollmlx")
+    try:
+        return _dispatch(argv, interactive)
+    finally:
+        if interactive:
+            ui.pop_title()
+
+
+def _dispatch(argv: list[str], interactive: bool) -> int:
     cfg = Config.from_env()
     if not argv:
         model = picker.pick_model(cfg)
         if model is None:
             ui.warn("selection cancelled — exiting")
             return 0
-        if sys.stdout.isatty() and sys.stdin.isatty():
+        if interactive:
             return run_stack_dialog(cfg, model)
         return run_stack(cfg, model)
     cmd, rest = argv[0], argv[1:]
@@ -224,6 +238,8 @@ def run_stack_dialog(cfg: Config, model: str) -> int:
 
     worker = threading.Thread(target=work, name="stack-start", daemon=True)
     worker.start()
+    # the tab shows the boot right away; the monitor refines it per frame
+    ui.set_title(f"🟡 {model.split('/')[-1]}")
     try:
         startup.dialog(model, lines, done, result)
     except KeyboardInterrupt:

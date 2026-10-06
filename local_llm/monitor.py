@@ -37,14 +37,8 @@ def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str,
             scr, model, mlx_port, lite_port, claude_cfg, small_port))
     except KeyboardInterrupt:
         pass
-    finally:
-        # hand the tab back its previous title (xterm save/restore stack;
-        # emulators without it just keep our last text)
-        try:
-            sys.stdout.write("\x1b[23t")
-            sys.stdout.flush()
-        except OSError:
-            pass
+    # the tab title's save/restore belongs to the app level (cli.main
+    # pushed at startup and pops at exit), not to the monitor
 
 
 def port_ok(port: int) -> bool:
@@ -201,11 +195,6 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
     tok = {"live_seq": -1, "pre_seq": -1, "idle": 1 << 30,
            "cur": 0.0, "txt": "idle", "summary": "", "peak": 0.0}
     tok_s = dict(tok)
-    try:
-        sys.stdout.write("\x1b[22t")  # push the tab's title; run() pops it
-        sys.stdout.flush()
-    except OSError:
-        pass
     prev_title = ""
     log_off = 0   # lines from the live tail; 0 = following
 

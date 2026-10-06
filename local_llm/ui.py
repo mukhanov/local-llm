@@ -3,6 +3,7 @@ import locale
 import os
 import platform
 import subprocess
+import sys
 
 
 def info(msg: str) -> None:
@@ -39,6 +40,34 @@ def force_compatible_term() -> None:
     xterm-256color has no 'rep' — output is clean (verified by capturing
     the monitor's output byte-by-byte). Call before initscr."""
     os.environ["TERM"] = "xterm-256color"
+
+
+def push_title() -> None:
+    """Save the terminal tab title (xterm stack) — pair with pop_title() at
+    exit so the user's own title comes back."""
+    try:
+        sys.stdout.write("\x1b[22t")
+        sys.stdout.flush()
+    except OSError:
+        pass
+
+
+def set_title(text: str) -> None:
+    """Name the terminal tab right away (OSC 0)."""
+    try:
+        sys.stdout.write(f"\x1b]0;{text}\x07")
+        sys.stdout.flush()
+    except OSError:
+        pass
+
+
+def pop_title() -> None:
+    """Restore the title saved by push_title()."""
+    try:
+        sys.stdout.write("\x1b[23t")
+        sys.stdout.flush()
+    except OSError:
+        pass
 
 
 def total_ram_gb() -> int:

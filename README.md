@@ -227,10 +227,12 @@ The tok/s numbers come from a thin wrapper around `mlx_lm.server`
 (`local_llm.mlxwrap`): it counts generated tokens and logs `TOKPS` lines
 once a second — the monitor graphs them.
 
-While the stack is up, the terminal tab is titled with a load circle —
-green/yellow/red by max(CPU%, RAM%), the memory pressure being what
-kills the model — plus the model name and the models' live RAM
-(`🟢 <model> · 65G`); quitting restores the tab's previous title.
+The terminal tab is owned by the app from the moment it launches: `🟢
+ollmlx` while you pick, `🟡 <model>` in the startup dialog, then the
+monitor keeps it updated — load circle (green/yellow/red by max(CPU%,
+RAM%), the memory pressure being what kills the model), model name and
+the models' live RAM (`🟢 <model> · 65G`). Quitting hands the original
+title back.
 
 ## Configuration
 
