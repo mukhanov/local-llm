@@ -110,6 +110,42 @@ def top_eaters(k: int = 3, exclude_pids=()) -> list:
     return best[:k]
 
 
+LOW_AVAILABLE_GB = 10   # MEM bar pulses red with a warning below this
+_LOW_PUSH_COOLDOWN = 600  # seconds between repeat low-memory pushes
+
+_low_latched = False    # a push is already out for the current low phase
+_last_push = 0.0
+
+
+def _push(title: str, message: str) -> None:
+    """macOS notification via the built-in osascript (no dependencies).
+    First delivery may need Script Editor allowed in System Settings →
+    Notifications; failures are silent — the on-screen warning remains."""
+    message = message.replace('"', "'").replace("\\", "")
+    try:
+        subprocess.run(["osascript", "-e",
+                        f'display notification "{message}" with title "{title}"'],
+                       capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
+def _maybe_notify_low(low: bool, eaters, vm, now: float) -> None:
+    """Push once when free memory crosses the danger line, then at most
+    every _LOW_PUSH_COOLDOWN while it stays there; reset on recovery."""
+    global _low_latched, _last_push
+    if not low:
+        _low_latched = False
+        return
+    if _low_latched and now - _last_push < _LOW_PUSH_COOLDOWN:
+        return
+    _low_latched, _last_push = True, now
+    avail = ui.human_bytes(vm.available)
+    who = f" Kill: {eaters[0][2]} ({ui.human_bytes(eaters[0][0])})" if eaters else ""
+    _push("ollmlx ⚠ OOM risk",
+          f"Only {avail} free — the model can OOM.{who}")
+
+
 def port_ok(port: int) -> bool:
     try:
         with socket.socket() as s:
@@ -572,6 +608,7 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
             add(by + bars, 0,
                 clip(f" top mem (kill <pid>): {txt}", w - 1),
                 curses.color_pair(3) if low_mem else curses.A_DIM)
+        _maybe_notify_low(low_mem, eaters, vm, time.monotonic())
 
         # --- logs: the very bottom box, its tail sitting just above the
         # bottom border; grows/shrinks with the terminal. ↑/↓ PgUp/PgDn
