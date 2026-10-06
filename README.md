@@ -224,11 +224,10 @@ The tok/s numbers come from a thin wrapper around `mlx_lm.server`
 (`local_llm.mlxwrap`): it counts generated tokens and logs `TOKPS` lines
 once a second — the monitor graphs them.
 
-While the stack is up, the terminal tab is titled with the model, the
-live RAM of the model processes and the model's live tokens/s while it
-generates (`ollmlx · <model> · 65G · 17 tok/s`) — the way Claude Code
-names its sessions in the tab bar; quitting restores the tab's previous
-title.
+While the stack is up, the terminal tab is titled with a load circle —
+green/yellow/red by max(CPU%, RAM%), the memory pressure being what
+kills the model — plus the model name and the models' live RAM
+(`🟢 <model> · 65G`); quitting restores the tab's previous title.
 
 ## Configuration
 

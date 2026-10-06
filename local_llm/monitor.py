@@ -91,26 +91,16 @@ def _set_title(text: str) -> None:
         pass
 
 
-def _rate_txt(st) -> str:
-    """Live rate as tab-sized text: decode '42 tok/s', prefill labelled —
-    a 1000 tok/s prefill must never read as generation speed."""
-    if st["txt"] == "idle" or st["cur"] <= 0:
-        return ""
-    if "prefill" in st["txt"]:
-        return f"{st['cur']:.0f} tok/s prefill"
-    return f"{st['cur']:.1f} tok/s" if st["cur"] < 10 else f"{st['cur']:.0f} tok/s"
-
-
 def load_emoji(load_pct: float) -> str:
     """Colored circle for the tab title: green/yellow/red by load —
     emoji glyphs keep their color where OSC color codes don't survive."""
     return "🟢" if load_pct < 60 else "🟡" if load_pct < 85 else "🔴"
 
 
-def _tab_title(model: str, procs, rate: str = "", load_pct: float = 0.0) -> str:
-    """Tab text: load circle + short model name + RAM of the model
+def _tab_title(model: str, procs, load_pct: float = 0.0) -> str:
+    """Tab text: load circle + short model name + the RAM of the model
     processes (mlx and the helper; litellm is a proxy, not a model — not
-    counted) + the live tok/s of whichever model is generating."""
+    counted). Nothing else."""
     ram = 0
     for label, p in procs:
         if label == "litellm":
@@ -122,9 +112,7 @@ def _tab_title(model: str, procs, rate: str = "", load_pct: float = 0.0) -> str:
     short = model.split("/")[-1]
     short = short[:25] + "…" if len(short) > 26 else short
     tail = f" · {ui.human_bytes(ram)}" if ram else ""
-    if rate:
-        tail += f" · {rate}"
-    return f"{load_emoji(load_pct)} ollmlx · {short}{tail}"
+    return f"{load_emoji(load_pct)} {short}{tail}"
 
 
 def tail_errors(path: str, k: int = 2):
@@ -374,18 +362,11 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         y[0] = y_top + (gh + 4 if gh else 2)
         put()
 
-        # --- tab title: what this tab runs, with live RAM and the live
-        # tok/s of whichever model is generating (the helper's rate only
-        # when the main model is idle, and labelled — never one number).
-        # The circle colors by load: max of CPU and RAM pressure, the
-        # thing that actually kills the model is memory. ---
+        # --- tab title: load circle, model, its process RAM — nothing
+        # else. The circle colors by load: max of CPU and RAM pressure,
+        # the thing that actually kills the model is memory. ---
         load = max(total, vm.percent)
-        rate = _rate_txt(tok)
-        if not rate and small_port:
-            rate = _rate_txt(tok_s)
-            if rate:
-                rate = f"small {rate}"
-        title = _tab_title(model, procs, rate, load)
+        title = _tab_title(model, procs, load)
         if title != prev_title:
             prev_title = title
             _set_title(title)
