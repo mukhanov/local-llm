@@ -64,9 +64,12 @@ quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
   catalogs and generates a Claude Code settings file. The advertised
   `contextWindow` is the KV-safe budget (prompt-cache bound, ~10%
   headroom), not the config.json maximum — pi/omp compact *before* the
-  model dies. Oversized requests that slip through are refused by the
-  server itself with a clean "context too long" error instead of the
-  Metal OOM that used to kill the generation thread.
+  model dies. A session that outgrows the budget anyway is trimmed
+  server-side: the oldest messages are dropped (system prompt and a fresh
+  tail starting on a user message always survive), the request is served,
+  and the trim is logged. Only an unsplittable request (one message over
+  the whole budget) gets a clean "context too long" refusal — the Metal
+  OOM that used to kill the generation thread can't happen.
 - **System monitor** — htop-style curses UI: the model's live tokens/sec
   (decode rate + a history graph, prefill rate while it reads your prompt),
   per-core CPU + history graph, RAM/swap, server status, process RSS,
@@ -277,11 +280,13 @@ shared with another downloaded model.
 - **Model dies overnight (404s to everything)** — a Metal OOM: the session
   grew past the prompt-cache ceiling (16GB ≈ 184k tokens on the 122B-class
   models; seen with a 186,688-token prompt) and the next cache extension
-  failed the GPU command buffer. Two defenses now: requests past the KV
-  budget are refused with "context too long" before any eval, and the
-  watchdog restarts the model within ~1.5 minutes if it dies anyway
-  (backing off if it dies repeatedly). Keep long sessions `/compact`ed.
-  The crashed run's log is `/tmp/mlx-server.log.1`.
+  failed the GPU command buffer. Three defenses now: the advertised
+  context is capped (MLX_MAX_CTX, default 110k) so clients compact early;
+  a session over the budget is trimmed server-side (oldest messages
+  dropped, the request still served — watch for "context trimmed" in the
+  logs); and the watchdog restarts the model within ~1.5 minutes if it
+  dies anyway, backing off if it dies repeatedly. The crashed run's log
+  is `/tmp/mlx-server.log.1`.
 - **Server didn't start** — check `/tmp/mlx-server.log` and `/tmp/litellm.log`
   (`.log.1` holds the previous run's tail — the crash before this one);
   `local-llm stop` cleans up leftover processes.

@@ -121,6 +121,51 @@ def _counting(ctx, inner):
         _emit(" · ".join(parts))
 
 
+def _msg_text(content) -> str:
+    """Message content as text: a string, or OpenAI-style parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out = []
+        for p in content:
+            if isinstance(p, dict):
+                out.append(str(p.get("text") or p.get("content") or ""))
+            else:
+                out.append(str(p))
+        return "".join(out)
+    return str(content)
+
+
+def _leading_system(messages):
+    sys = []
+    for m in messages:
+        if m.get("role") == "system":
+            sys.append(m)
+        else:
+            break
+    return sys
+
+
+def _trim_to_fit(messages, target_chars):
+    """The newest messages whose text fits target_chars, always keeping the
+    leading system messages and cutting only on a user boundary (never
+    splitting a tool_call/tool_result chain). None when nothing can go."""
+    total = sum(len(_msg_text(m.get("content"))) + 8 for m in messages)
+    acc = 0
+    cut = len(messages)
+    for i in range(len(messages) - 1, -1, -1):
+        acc += len(_msg_text(messages[i].get("content"))) + 8
+        if acc > target_chars:
+            cut = i + 1
+            break
+    while cut < len(messages) and messages[cut].get("role") != "user":
+        cut += 1
+    if cut >= len(messages):
+        return None
+    trimmed = _leading_system(messages) + messages[cut:]
+    return trimmed if len(trimmed) < len(messages) else None
+
+
 def _install_hook() -> None:
     orig_generate = mlxs.ResponseGenerator.generate
     # KV budget for this machine (tokens); 0 = unlimited. Set by servers.
@@ -132,10 +177,35 @@ def _install_hook() -> None:
     def generate(self, request, generation_args, progress_callback=None):
         ctx, inner = orig_generate(
             self, request, generation_args, _prefill_cb(progress_callback))
-        # raised before the first mx.eval (tokenized only so far) — the
-        # handler thread drops the request, the generation thread lives
         n = len(getattr(ctx, "prompt", ()) or ())
         if max_input and n > max_input:
+            # the session outgrew the machine's KV budget: shrink it here —
+            # clients like GUI apps can't /compact, and a 404 leaves them
+            # stuck. Drop the oldest messages, keep the system prompt and a
+            # fresh tail; the tail starts on a user message so tool chains
+            # never split.
+            messages = getattr(request, "messages", None)
+            orig_len = len(messages) if isinstance(messages, list) else 0
+            if isinstance(messages, list) and orig_len > 2:
+                total_chars = sum(len(_msg_text(m.get("content"))) + 8
+                                  for m in messages)
+                target_chars = int(total_chars * max_input * 0.8 / n)
+                for _ in range(3):
+                    trimmed = _trim_to_fit(messages, target_chars)
+                    if trimmed is None:
+                        break
+                    dropped = len(messages) - len(trimmed)
+                    request.messages = trimmed
+                    ctx, inner = orig_generate(
+                        self, request, generation_args,
+                        _prefill_cb(progress_callback))
+                    n = len(getattr(ctx, "prompt", ()) or ())
+                    if n <= max_input:
+                        _emit(f"context trimmed: dropped {dropped} oldest "
+                              f"messages, {n} tokens fit the budget — "
+                              "compact the client session")
+                        return ctx, _counting(ctx, inner)
+                    target_chars = int(target_chars * 0.7)
             raise ValueError(
                 f"context too long: {n} tokens > {max_input} (the KV budget"
                 " of this machine) — compact the session and retry")
