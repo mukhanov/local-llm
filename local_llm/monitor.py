@@ -101,10 +101,16 @@ def _rate_txt(st) -> str:
     return f"{st['cur']:.1f} tok/s" if st["cur"] < 10 else f"{st['cur']:.0f} tok/s"
 
 
-def _tab_title(model: str, procs, rate: str = "") -> str:
-    """Tab text: short model name + RAM of the model processes (mlx and
-    the helper; litellm is a proxy, not a model — not counted) + the live
-    tok/s of whichever model is generating."""
+def load_emoji(load_pct: float) -> str:
+    """Colored circle for the tab title: green/yellow/red by load —
+    emoji glyphs keep their color where OSC color codes don't survive."""
+    return "🟢" if load_pct < 60 else "🟡" if load_pct < 85 else "🔴"
+
+
+def _tab_title(model: str, procs, rate: str = "", load_pct: float = 0.0) -> str:
+    """Tab text: load circle + short model name + RAM of the model
+    processes (mlx and the helper; litellm is a proxy, not a model — not
+    counted) + the live tok/s of whichever model is generating."""
     ram = 0
     for label, p in procs:
         if label == "litellm":
@@ -118,7 +124,7 @@ def _tab_title(model: str, procs, rate: str = "") -> str:
     tail = f" · {ui.human_bytes(ram)}" if ram else ""
     if rate:
         tail += f" · {rate}"
-    return f"ollmlx · {short}{tail}"
+    return f"{load_emoji(load_pct)} ollmlx · {short}{tail}"
 
 
 def tail_errors(path: str, k: int = 2):
@@ -370,13 +376,16 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
 
         # --- tab title: what this tab runs, with live RAM and the live
         # tok/s of whichever model is generating (the helper's rate only
-        # when the main model is idle, and labelled — never one number) ---
+        # when the main model is idle, and labelled — never one number).
+        # The circle colors by load: max of CPU and RAM pressure, the
+        # thing that actually kills the model is memory. ---
+        load = max(total, vm.percent)
         rate = _rate_txt(tok)
         if not rate and small_port:
             rate = _rate_txt(tok_s)
             if rate:
                 rate = f"small {rate}"
-        title = _tab_title(model, procs, rate)
+        title = _tab_title(model, procs, rate, load)
         if title != prev_title:
             prev_title = title
             _set_title(title)

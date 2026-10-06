@@ -195,7 +195,19 @@ def _install_hook() -> None:
                     if trimmed is None:
                         break
                     dropped = len(messages) - len(trimmed)
+                    # honest to the model: without this note it would
+                    # confidently answer about context it no longer has
+                    sys_n = len(_leading_system(trimmed))
+                    first = trimmed[sys_n]
+                    content = first.get("content")
+                    if isinstance(content, str):
+                        first["content"] = (
+                            f"[{dropped} oldest messages of this conversation"
+                            " were dropped to fit the context budget; earlier"
+                            " details are unavailable.]\n" + content)
                     request.messages = trimmed
+                    _emit(f"trim attempt: sending {len(trimmed)} of "
+                          f"{orig_len} messages (dropped {dropped})")
                     ctx, inner = orig_generate(
                         self, request, generation_args,
                         _prefill_cb(progress_callback))
@@ -206,6 +218,8 @@ def _install_hook() -> None:
                               "compact the client session")
                         return ctx, _counting(ctx, inner)
                     target_chars = int(target_chars * 0.7)
+                    _emit(f"context trim pass: still {n} tokens over "
+                          f"{max_input} — shrinking further")
             raise ValueError(
                 f"context too long: {n} tokens > {max_input} (the KV budget"
                 " of this machine) — compact the session and retry")
