@@ -62,7 +62,8 @@ def write_client_configs(cfg, model: str, small: bool = True,
     # maximum: past the prompt-cache ceiling the model dies on the next
     # cache extension (Metal OOM), so clients must compact earlier
     if max_input is None:
-        max_input = hf.safe_context(cfg.hf_hub, model, cfg.prompt_cache_bytes)
+        max_input = hf.safe_context(cfg.hf_hub, model, cfg.prompt_cache_bytes,
+                                    cfg.max_ctx)
     ctx = max_input
     reasoning = "Qwen3" in model
     ui.info("Writing client configs")

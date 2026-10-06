@@ -524,17 +524,20 @@ def model_kv_per_token(hf_hub: Path, repo: str) -> float | None:
     return 2 * kvh * hd * layers * 2
 
 
-def safe_context(hf_hub: Path, repo: str, prompt_cache_bytes: int) -> int:
+def safe_context(hf_hub: Path, repo: str, prompt_cache_bytes: int,
+                 cap: int = 110_000) -> int:
     """The context this model can actually serve on this machine: the
-    config's window clamped to what fits the prompt-cache budget with 10%
-    headroom (a session past the ceiling dies on the next cache extension —
-    Metal command-buffer OOM, the generation thread is gone). Advertised to
-    clients so they compact BEFORE the model dies. Unclamped when the KV
-    size is unknown or the cache is unlimited."""
+    config's window clamped to the hard cap and to what fits the
+    prompt-cache budget with 10% headroom (a session past the ceiling dies
+    on the next cache extension — Metal command-buffer OOM, the generation
+    thread is gone). Advertised to clients so they compact BEFORE the model
+    dies. cap=0 — KV budget only."""
     ctx = model_ctx(hf_hub, repo)
-    if not prompt_cache_bytes:
-        return ctx
-    kv = model_kv_per_token(hf_hub, repo)
-    if not kv:
-        return ctx
-    return max(4096, min(ctx, int(prompt_cache_bytes / kv * 0.9)))
+    lims = [ctx]
+    if cap:
+        lims.append(cap)
+    if prompt_cache_bytes:
+        kv = model_kv_per_token(hf_hub, repo)
+        if kv:
+            lims.append(int(prompt_cache_bytes / kv * 0.9))
+    return max(4096, min(lims))

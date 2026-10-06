@@ -35,6 +35,7 @@ Usage (symlink: ~/bin/local-llm):
   local-llm token [hf_…]   # HF token: show / save / --clear (or env HF_TOKEN)
 
 Env: MLX_KV_BITS=8 (KV-cache quantization, 0=off), MLX_PROMPT_CACHE_BYTES (0=off),
+     MLX_MAX_CTX=110000 (hard context ceiling for clients + server refusal),
      MLX_PORT, LITELLM_PORT, LOAD_TIMEOUT, OLLMLX_HOME, HF_HUB_CACHE,
      OLLMLX_SMALL_MODEL / MLX_SMALL_PORT (tiny helper model for fast calls)"""
 
@@ -145,7 +146,8 @@ def run_stack(cfg: Config, model: str) -> int:
 
     try:
         state = {"big": None, "small": None}
-        max_input = hf.safe_context(cfg.hf_hub, model, cfg.prompt_cache_bytes)
+        max_input = hf.safe_context(cfg.hf_hub, model, cfg.prompt_cache_bytes,
+                                    cfg.max_ctx)
         if max_input < hf.model_ctx(cfg.hf_hub, model):
             ui.info(f"model context capped at {max_input} tokens"
                     " (prompt-cache budget) — oversized requests are refused,"

@@ -33,6 +33,11 @@ class Config:
     # which kills the generation thread until restart).
     prompt_cache_bytes: int
     load_timeout: int  # seconds to wait for weights to load
+    # hard context ceiling (tokens) advertised to clients and enforced by
+    # the server; the KV-budget clamp still applies if stricter. 0 = off.
+    # 110k: the KV ceiling of the 122B-class on a 16GB cache is ~174k, but
+    # sessions that actually live near it OOM the machine under pressure.
+    max_ctx: int
 
     @property
     def venv_python(self) -> Path:
@@ -78,4 +83,5 @@ class Config:
                 os.environ.get("MLX_PROMPT_CACHE_BYTES", str(16 * 1024**3))
             ),
             load_timeout=int(os.environ.get("LOAD_TIMEOUT", "900")),
+            max_ctx=int(os.environ.get("MLX_MAX_CTX", "110000")),
         )

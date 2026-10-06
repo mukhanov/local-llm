@@ -151,12 +151,13 @@ def tail_errors(path: str, k: int = 2):
     return hits[-k:]
 
 
-def tail_lines(path: str, k: int = 2):
-    """Last k log lines (not only errors): generation progress, requests."""
+def tail_lines(path: str, k: int = 2, window: int = 262144):
+    """Last k log lines (not only errors): generation progress, requests.
+    Reads up to `window` bytes of tail — enough history for scrolling."""
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
-            f.seek(max(0, size - 16384))
+            f.seek(max(0, size - window))
             data = f.read().decode("utf-8", "replace")
     except OSError:
         return []
@@ -212,6 +213,7 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
     except OSError:
         pass
     prev_title = ""
+    log_off = 0   # lines from the live tail; 0 = following
 
     curses.curs_set(0)
     try:
@@ -501,7 +503,9 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
                     f"  {ui.human_bytes(sw.used)}/{ui.human_bytes(sw.total)}")
 
         # --- logs: the very bottom box, its tail sitting just above the
-        # bottom border; grows/shrinks with the terminal ---
+        # bottom border; grows/shrinks with the terminal. ↑/↓ PgUp/PgDn
+        # scroll back into history (the frame title shows the distance
+        # from live), End/G returns to the live tail. ---
         lt = by + (2 if sw.total else 1) + 1
         height = usable - lt                 # rows incl. top/bottom borders
         errs = [(tag, l) for tag, path in LOGS for l in tail_errors(path)][-3:]
@@ -509,13 +513,19 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         if height >= 3:
             content = height - 2
             room = max(0, content - len(log_rows))
-            shown = [(tag, l) for tag, path in LOGS
-                     for l in tail_lines(path, room)][-room:] if room else []
-            log_rows += [(f"[{tag}] {l}", curses.A_DIM) for tag, l in shown]
+            merged = [(tag, l) for tag, path in LOGS
+                      for l in tail_lines(path, room + log_off)] if room else []
+            merged = merged[-(room + log_off):]
+            log_off = min(log_off, max(0, len(merged) - room))
+            if log_off:
+                merged = merged[:len(merged) - log_off]
+            view = merged[-room:]
+            log_rows += [(f"[{tag}] {l}", curses.A_DIM) for tag, l in view]
             if not log_rows:
                 log_rows = [("no errors · logs empty", curses.color_pair(1))]
             n_log = min(len(log_rows), content)
-            box_top(lt, 0, w - 1, " logs ")
+            box_top(lt, 0, w - 1,
+                    f" logs  ·  {log_off} from live " if log_off else " logs ")
             first = lt + 1 + (content - n_log)   # tail hugs the bottom border
             for i, (text, attr) in enumerate(log_rows[-n_log:]):
                 add(first + i, 2, clip(text, w - 5), attr)
@@ -526,9 +536,22 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
                 ", /tmp/mlx-watchdog.log"
                 if small_port else
                 "/tmp/mlx-server.log, /tmp/litellm.log, /tmp/mlx-watchdog.log")
-        add(h - 1, 0, f" q — quit | logs: {logs}", curses.A_DIM)
+        add(h - 1, 0,
+            f" q — quit · ↑↓ PgUp/PgDn scroll logs | logs: {logs}",
+            curses.A_DIM)
         stdscr.refresh()
 
         ch = stdscr.getch()
         if ch in (ord("q"), ord("Q")):
             return
+        page = max(1, (h - 6) // 2)
+        if ch in (curses.KEY_UP, ord("k")):
+            log_off += 1
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            log_off = max(0, log_off - 1)
+        elif ch == curses.KEY_PPAGE:
+            log_off += page
+        elif ch in (curses.KEY_NPAGE, ord(" ")):
+            log_off = max(0, log_off - page)
+        elif ch in (curses.KEY_END, ord("G")):
+            log_off = 0

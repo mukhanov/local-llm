@@ -212,7 +212,9 @@ machine and what's still available), then the RAM/swap bars — and at the
 very bottom a full-width box with the latest errors and log tails from
 `/tmp/mlx-server.log`, `/tmp/mlx-small.log` and `/tmp/litellm.log`; the
 box grows with the terminal and its tail hugs the bottom border. The two
-graphs and all boxes follow the same left/right column grid. Press `q`
+graphs and all boxes follow the same left/right column grid. The logs
+scroll — `↑/↓` line by line, `PgUp/PgDn` by pages, the frame title shows
+the distance from live, `End`/`G` returns to the tail. Press `q`
 (or Ctrl-C) to stop the whole stack.
 
 The tok/s numbers come from a thin wrapper around `mlx_lm.server`
@@ -238,7 +240,8 @@ All via environment variables:
 | `MLX_KV_BITS`             | `0`          | KV quantization; breaks prompt-cache hits on long contexts — only for ~100G models |
 | `MLX_KV_GROUP_SIZE`       | `64`         | KV-cache group size                        |
 | `MLX_PROMPT_CACHE_BYTES`  | `17179869184` | prompt-cache cap (16GB ≈ 136k tokens on the 122B), `0` = unlimited |
-| `LOAD_TIMEOUT`            | `900`        | seconds to wait for weights to load        |
+| `MLX_MAX_CTX`             | `110000`     | hard context ceiling (tokens): advertised to clients so they compact early, enforced by the server as a clean "context too long" refusal; `0` = KV-budget only |
+| `LOAD_TIMEOUT`            | `900`        | seconds to wait for weights to load |
 | `OLLMLX_HOME`             | `~/.ollmlx`  | venv, litellm config, token, claude config |
 | `HF_HUB_CACHE`            | `~/.cache/huggingface/hub` | model cache path           |
 | `HF_TOKEN`                | —            | HuggingFace token (or `local-llm token`)   |
