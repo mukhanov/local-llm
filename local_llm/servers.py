@@ -270,6 +270,11 @@ def start_mlx(cfg, model: str, max_input: int | None = None) -> None:
                     "mlx_lm.server — running without it")
     if cfg.prompt_cache_bytes > 0 and "--prompt-cache-bytes" in supported:
         flags += ["--prompt-cache-bytes", str(cfg.prompt_cache_bytes)]
+    if "--prefill-step-size" in supported:
+        # qwen3.5/3.8 MoE: a 2048-token chunk fans out to thousands of
+        # expert buffers and hits the Metal resource limit (499000) —
+        # mlx-lm#1644's proven workaround. Costs ~2.5x prefill speed.
+        flags += ["--prefill-step-size", "512"]
     log = _open_log(MLX_LOG)
     env = dict(os.environ)
     # By the time we start mlx, the cache is complete (cli verified it against

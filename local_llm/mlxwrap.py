@@ -182,6 +182,29 @@ def _restore_tool_args(messages):
                 func["arguments"] = json.dumps(args, ensure_ascii=False)
 
 
+def _patch_arrays_cache() -> None:
+    """Backport of mlx-lm#1632 (the state property of ArraysCache): include
+    the metadata arrays (lengths, left_padding) in the evaluated cache
+    state. Without it, advance() accumulates a lazy subtraction graph on
+    every decode step and long sessions die with [metal::malloc] Resource
+    limit (499000) exceeded (mlx-lm#1644 — our qwen3.8/3.5 models use
+    ArraysCache). 0.32.0 ships unpatched — drop when a release has it."""
+    import mlx.core as mx
+    from mlx_lm.models import cache as cache_mod
+
+    def state(self):
+        left_padding = mx.array([]) if self.left_padding is None else self.left_padding
+        lengths = mx.array([]) if self.lengths is None else self.lengths
+        return self.cache, left_padding, lengths
+
+    def set_state(self, v):
+        self.cache, left_padding, lengths = v
+        self.left_padding = left_padding if left_padding.size > 0 else None
+        self.lengths = lengths if lengths.size > 0 else None
+
+    cache_mod.ArraysCache.state = property(state, set_state)
+
+
 def _install_hook() -> None:
     orig_generate = mlxs.ResponseGenerator.generate
     # KV budget for this machine (tokens); 0 = unlimited. Set by servers.
@@ -254,6 +277,10 @@ def main() -> None:
         _vendor_models()
     except Exception as exc:  # vendoring must not kill the server either
         print(f"model vendoring failed: {exc}", file=sys.stderr, flush=True)
+    try:
+        _patch_arrays_cache()
+    except Exception as exc:  # the cache fix must not kill the server either
+        print(f"arrays cache patch failed: {exc}", file=sys.stderr, flush=True)
     try:
         _install_hook()
     except Exception as exc:  # never let stats kill the server
