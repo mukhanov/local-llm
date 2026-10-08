@@ -71,7 +71,7 @@ class Config:
             hf_hub=Path(
                 os.environ.get("HF_HUB_CACHE", "~/.cache/huggingface/hub")
             ).expanduser(),
-            mlx_port=int(os.environ.get("MLX_PORT", "8080")),
+            mlx_port=int(os.environ.get("MLX_PORT", "19797")),
             litellm_port=int(os.environ.get("LITELLM_PORT", "4000")),
             api_key="sk-local-llm",
             small_model=os.environ.get(

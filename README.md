@@ -21,7 +21,7 @@ $ local-llm
  j/k↑↓ PgUp/PgDn g/G · / search · l more · s sort · a all⇄community · d delete · Enter select · q cancel
 ```
 
-Behind the scenes it starts **mlx_lm.server** (OpenAI API on `:8080`) and a
+Behind the scenes it starts **mlx_lm.server** (OpenAI API on `:19797`) and a
 **litellm** proxy (`:4000`) that adds an Anthropic `/v1/messages` endpoint, so
 Claude Code can talk to the same local model. Both run as foreground children:
 quitting the monitor (or Ctrl-C) stops everything — no daemons left behind.
@@ -243,7 +243,7 @@ All via environment variables:
 
 | Variable                  | Default      | Meaning                                    |
 |---------------------------|--------------|--------------------------------------------|
-| `MLX_PORT`                | `8080`       | mlx_lm.server port (OpenAI API)            |
+| `MLX_PORT`                | `19797`      | mlx_lm.server port (OpenAI API)            |
 | `LITELLM_PORT`            | `4000`       | litellm proxy port (OpenAI + Anthropic)    |
 | `OLLMLX_SMALL_MODEL`      | `mlx-community/Qwen3-0.6B-4bit` | tiny helper model |
 | `MLX_SMALL_PORT`          | `8081`       | helper model port (`ollmlx/small`)         |

@@ -1,4 +1,4 @@
-"""Lifecycle of mlx_lm.server (:8080, OpenAI) and litellm (:4000, OpenAI +
+"""Lifecycle of mlx_lm.server (:19797, OpenAI) and litellm (:4000, OpenAI +
 Anthropic bridge): litellm config, start, readiness wait, warmup, stop,
 plus a watchdog that restarts mlx after a crash or the post-OOM zombie.
 
