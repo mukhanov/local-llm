@@ -4,7 +4,8 @@ Launched instead of `python -m mlx_lm.server` (same CLI, same behavior —
 see servers.start_mlx). One hook: ResponseGenerator.generate is wrapped so
 that every generated token bumps an aggregate counter, and once a second a
 "TOKPS ..." line goes to stdout — servers.py redirects it to
-/tmp/mlx-server.log, where monitor.py picks it up for its tok/s graph.
+~/.ollmlx/logs/mlx-server.log, where monitor.py picks it up for its tok/s
+graph.
 
 Line formats (kept short and stable — the monitor parses them):
   TOKPS live #12 48.2          decode, ~1/s while tokens flow (aggregate
@@ -57,7 +58,7 @@ _live = {"tokens": 0, "t0": None, "seq": 0}
 
 
 def _emit(text: str) -> None:
-    print(f"TOKPS {text}", flush=True)   # stdout -> /tmp/mlx-server.log
+    print(f"TOKPS {text}", flush=True)   # stdout -> the mlx-server.log servers.py opened
 
 
 def _tok_bump() -> None:
@@ -188,7 +189,7 @@ def _patch_arrays_cache() -> None:
     state. Without it, advance() accumulates a lazy subtraction graph on
     every decode step and long sessions die with [metal::malloc] Resource
     limit (499000) exceeded (mlx-lm#1644 — our qwen3.8/3.5 models use
-    ArraysCache). 0.32.0 ships unpatched — drop when a release has it."""
+    ArraysCache). 0.32.0–0.32.2 ship unpatched — drop when a release has it."""
     import mlx.core as mx
     from mlx_lm.models import cache as cache_mod
 

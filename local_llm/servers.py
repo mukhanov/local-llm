@@ -8,6 +8,7 @@ finally)."""
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -18,11 +19,15 @@ import urllib.request
 from pathlib import Path
 
 from . import hf, ui
+from .applog import log, logs_dir
 
-MLX_LOG = "/tmp/mlx-server.log"
-MLX_SMALL_LOG = "/tmp/mlx-small.log"
-LITELLM_LOG = "/tmp/litellm.log"
-WATCHDOG_LOG = "/tmp/mlx-watchdog.log"
+_LOGS = logs_dir()   # persistent: /tmp is wiped on reboot, taking the
+# evidence of a crash with it — ~/.ollmlx/logs survives
+MLX_LOG = str(_LOGS / "mlx-server.log")
+MLX_SMALL_LOG = str(_LOGS / "mlx-small.log")
+LLAMA_LOG = str(_LOGS / "llama-server.log")
+LITELLM_LOG = str(_LOGS / "litellm.log")
+WATCHDOG_LOG = str(_LOGS / "mlx-watchdog.log")
 
 # Popen handles of live children — killed in stop_children()
 children: list[subprocess.Popen] = []
@@ -31,6 +36,13 @@ children: list[subprocess.Popen] = []
 # our wrapper around mlx_lm.server (tok/s logging) or a raw server from an
 # older local-llm — `stop` must kill either
 _MLX_PATTERN = r"local_llm\.mlxwrap|mlx_lm\.server"
+
+
+def _llama_pattern(port: int) -> str:
+    """Match string for OUR llama-server child. The port is part of the
+    pattern on purpose: `pkill -f llama-server` alone would take down an
+    unrelated llama-server the user runs for something else."""
+    return rf"llama-server.*--port {port}"
 
 
 def http_ok(url: str, timeout: float = 2.0) -> bool:
@@ -67,11 +79,14 @@ def _open_log(path: str):
     return open(path, "wb")
 
 
-def stop_all() -> None:
+def stop_all(llama_port: int = 0) -> None:
     """For `local-llm stop`: kill processes leaked from a previous run."""
     ui.info("Stopping servers")
     ui.ok("mlx_lm.server stopped" if _pkill(_MLX_PATTERN)
           else "mlx_lm.server not running")
+    if llama_port:
+        ui.ok("llama-server stopped" if _pkill(_llama_pattern(llama_port))
+              else "llama-server not running")
     ui.ok("litellm stopped" if _pkill(f"litellm --config")
           else "litellm not running")
 
@@ -109,6 +124,7 @@ def _note(msg: str) -> None:
             f.write(f"{stamp} - WATCHDOG - {msg}\n")
     except OSError:
         pass
+    log.warning("watchdog: %s", msg)
 
 
 def _probe_generation(port: int, model: str, timeout: float = 30.0) -> str:
@@ -135,10 +151,11 @@ def supervise(cfg, model: str, state: dict, interval: float = 45.0,
               loop_window: float = 600.0, loop_max: int = 3,
               backoff: float = 600.0,
               max_input: int | None = None) -> None:
-    """Start the watchdog thread. `state` = {"big": Popen, "small": Popen|None};
-    on a dead process or 2 consecutive bad probes it restarts both mlx
-    servers in place — litellm and the client configs keep pointing at the
-    same ports, so clients just see a pause.
+    """Start the watchdog thread. `state` = {"big": Popen, "small": Popen|None,
+    "backend": "mlx"|"llama", ...}; on a dead process or 2 consecutive bad
+    probes it restarts the model server(s) in place — litellm and the
+    client configs keep pointing at the same ports, so clients just see a
+    pause.
 
     loop_max restarts within loop_window = the client session is bigger
     than this machine can serve (every restart the client resends its full
@@ -149,13 +166,22 @@ def supervise(cfg, model: str, state: dict, interval: float = 45.0,
     restarts: list[float] = []
 
     def restart(reason: str) -> None:
-        _pkill(_MLX_PATTERN)   # takes the helper down too; it comes right back
+        llama = state.get("backend") == "llama"
+        if llama:
+            # only our llama-server (the port keeps unrelated ones alive);
+            # the MLX helper is a separate child and stays up
+            _pkill(_llama_pattern(cfg.mlx_port))
+        else:
+            _pkill(_MLX_PATTERN)   # takes the helper down too; it comes back
         time.sleep(1)
         try:
-            state["big"] = start_mlx(cfg, model, max_input)
-            if state["small"] is not None:
+            state["big"] = (start_llama(cfg, state["gguf_path"], model,
+                                        max_input) if llama
+                            else start_mlx(cfg, model, max_input))
+            if not llama and state["small"] is not None:
                 state["small"] = start_mlx_small(cfg)
-            _note(f"mlx restarted ({reason}) — stack healthy again")
+            _note(f"{'llama-server' if llama else 'mlx'} restarted"
+                  f" ({reason}) — stack healthy again")
         except SystemExit as exc:
             _note(f"restart failed ({reason}): {exc}")
 
@@ -215,22 +241,27 @@ def ensure_litellm() -> None:
     subprocess.run(["uv", "tool", "install", "litellm"], check=True)
 
 
-def _wait_ready(url: str, proc, timeout: int, log: str,
+def _wait_ready(url: str, proc, timeout: int, logpath: str,
                 what: str, step: int = 3) -> int:
     waited = 0
     while not http_ok(url):
         if proc.poll() is not None:
+            log.error("%s died (code %s) — tail of %s:", what,
+                      proc.returncode, logpath)
             ui.warn(f"{what} died:")
-            print("\n".join(tail(log, 30)))
+            print("\n".join(tail(logpath, 30)))
             raise SystemExit(1)
         if waited >= timeout:
+            log.error("%s not ready in %ds — tail of %s:", what, timeout,
+                      logpath)
             ui.warn(f"{what} did not become ready in {timeout}s")
-            print("\n".join(tail(log, 30)))
+            print("\n".join(tail(logpath, 30)))
             raise SystemExit(1)
         print(f"\r   loading… {waited}s", end="", flush=True)
         time.sleep(step)
         waited += step
     print(f"\r   ready in {waited}s        ")
+    log.info("%s ready in %ds (%s)", what, waited, url)
     return waited
 
 
@@ -275,7 +306,7 @@ def start_mlx(cfg, model: str, max_input: int | None = None) -> None:
         # expert buffers and hits the Metal resource limit (499000) —
         # mlx-lm#1644's proven workaround. Costs ~2.5x prefill speed.
         flags += ["--prefill-step-size", "512"]
-    log = _open_log(MLX_LOG)
+    logfile = _open_log(MLX_LOG)
     env = dict(os.environ)
     # By the time we start mlx, the cache is complete (cli verified it against
     # the repo file list). Force offline: otherwise a partial cache would make
@@ -289,18 +320,57 @@ def start_mlx(cfg, model: str, max_input: int | None = None) -> None:
         env["OLLMLX_MAX_INPUT_TOKENS"] = str(max_input)
     if cfg.hf_token:
         env["HF_TOKEN"] = cfg.hf_token
+    cmd = [python, "-m", "local_llm.mlxwrap",   # mlx_lm.server + tok/s log
+           "--model", model, "--host", "127.0.0.1",
+           "--port", str(cfg.mlx_port),
+           "--max-tokens", str(min(ctx, 32768)), *flags]
+    log.info("spawn: %s", shlex.join(cmd))
     try:
-        proc = subprocess.Popen(
-            [python, "-m", "local_llm.mlxwrap",   # mlx_lm.server + tok/s log
-             "--model", model, "--host", "127.0.0.1",
-             "--port", str(cfg.mlx_port),
-             "--max-tokens", str(min(ctx, 32768)), *flags],
-            stdout=log, stderr=subprocess.STDOUT, env=env)
+        proc = subprocess.Popen(cmd, stdout=logfile,
+                                stderr=subprocess.STDOUT, env=env)
     finally:
-        log.close()
+        logfile.close()
     children.append(proc)
     _wait_ready(f"http://127.0.0.1:{cfg.mlx_port}/v1/models", proc,
                 cfg.load_timeout, MLX_LOG, "mlx_lm.server")
+    return proc
+
+
+def start_llama(cfg, gguf_path: str, alias: str,
+                max_input: int | None = None):
+    """llama-server (llama.cpp) in the mlx slot: GGUF weights on
+    cfg.mlx_port with the OpenAI API, so litellm/clients/monitor keep
+    working unchanged. Readiness = /v1/models 200, same as mlx."""
+    from . import llamacpp
+    server = llamacpp.ensure_llama_server(cfg.llama_server)
+    ui.info(f"Starting llama-server on :{cfg.mlx_port}")
+    _pkill(_llama_pattern(cfg.mlx_port))
+    time.sleep(1)
+    flags = ["-m", gguf_path, "--host", "127.0.0.1",
+             "--port", str(cfg.mlx_port),
+             # the alias is what /v1/models reports — keep it the repo id
+             # so litellm's model: openai/<repo> lines up
+             "-a", alias, "-ngl", "999",
+             # -c caps the KV allocation AND is the refusal ceiling: prompts
+             # past it get a clean 400 instead of an OOM later (the same
+             # job OLLMLX_MAX_INPUT_TOKENS does for mlxwrap)
+             "-c", str(max_input or 0)]
+    if cfg.kv_bits == 8:
+        flags += ["-ctk", "q8_0", "-ctv", "q8_0"]
+    elif cfg.kv_bits:
+        ui.warn(f"MLX_KV_BITS={cfg.kv_bits}: llama-server quantizes KV to"
+                " q8_0 only — running without KV quantization")
+    logfile = _open_log(LLAMA_LOG)
+    cmd = [server, *flags]
+    log.info("spawn: %s", shlex.join(cmd))
+    try:
+        proc = subprocess.Popen(cmd, stdout=logfile,
+                                stderr=subprocess.STDOUT)
+    finally:
+        logfile.close()
+    children.append(proc)
+    _wait_ready(f"http://127.0.0.1:{cfg.mlx_port}/v1/models", proc,
+                cfg.load_timeout, LLAMA_LOG, "llama-server")
     return proc
 
 
@@ -326,16 +396,17 @@ def start_mlx_small(cfg) -> None:
     env = dict(os.environ)
     env["HF_HUB_OFFLINE"] = "1"
     env["HF_HUB_DISABLE_XET"] = "1"
-    log = _open_log(MLX_SMALL_LOG)
+    logfile = _open_log(MLX_SMALL_LOG)
+    cmd = [python, "-m", "local_llm.mlxwrap",
+           "--model", cfg.small_model, "--host", "127.0.0.1",
+           "--port", str(cfg.mlx_small_port),
+           "--max-tokens", "4096", *flags]
+    log.info("spawn: %s", shlex.join(cmd))
     try:
-        proc = subprocess.Popen(
-            [python, "-m", "local_llm.mlxwrap",
-             "--model", cfg.small_model, "--host", "127.0.0.1",
-             "--port", str(cfg.mlx_small_port),
-             "--max-tokens", "4096", *flags],
-            stdout=log, stderr=subprocess.STDOUT, env=env)
+        proc = subprocess.Popen(cmd, stdout=logfile,
+                                stderr=subprocess.STDOUT, env=env)
     finally:
-        log.close()
+        logfile.close()
     children.append(proc)
     _wait_ready(f"http://127.0.0.1:{cfg.mlx_small_port}/v1/models", proc,
                 120, MLX_SMALL_LOG, "helper model")
@@ -386,14 +457,15 @@ def start_litellm(cfg, model: str, small: bool = True) -> None:
     env = dict(os.environ)
     # Anthropic bridge /v1/messages -> chat/completions (mlx has no /v1/responses)
     env["LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES"] = "1"
-    log = _open_log(LITELLM_LOG)
+    logfile = _open_log(LITELLM_LOG)
+    cmd = ["litellm", "--config", str(cfg.litellm_cfg),
+           "--host", "127.0.0.1", "--port", str(cfg.litellm_port)]
+    log.info("spawn: %s", shlex.join(cmd))
     try:
-        proc = subprocess.Popen(
-            ["litellm", "--config", str(cfg.litellm_cfg),
-             "--host", "127.0.0.1", "--port", str(cfg.litellm_port)],
-            stdout=log, stderr=subprocess.STDOUT, env=env)
+        proc = subprocess.Popen(cmd, stdout=logfile,
+                                stderr=subprocess.STDOUT, env=env)
     finally:
-        log.close()
+        logfile.close()
     children.append(proc)
     waited = _wait_ready(health, proc, 60, LITELLM_LOG, "litellm", step=1)
     ui.ok(f"litellm ready ({waited}s)")
@@ -423,8 +495,8 @@ def warmup(cfg) -> None:
         ui.warn("if it repeats: memory pressure can kill the generation "
                 "thread (Metal OOM -> 404s until restart) — free RAM/swap, "
                 "`local-llm stop`, retry; the previous run's log is "
-                f"{MLX_LOG}.1")
-        for path in (MLX_LOG, LITELLM_LOG):
+                f"{MLX_LOG}.1 / {LLAMA_LOG}.1")
+        for path in (MLX_LOG, LLAMA_LOG, LITELLM_LOG):
             lines = tail(path, 15)
             if lines:
                 print(f"--- last lines of {path} ---")

@@ -32,8 +32,13 @@ FAMILIES = (
     ("mixtral", 4), ("mistral", 3), ("deepseek", 4), ("glm", 3), ("phi", 3),
 )
 
-# quantization -> bytes per parameter in the weights
+# quantization -> bytes per parameter in the weights. GGUF names first and
+# longest-first: "iq4_xs" must win over "q4_k", and "iq3"/"iq2" match their
+# -xxs/-m variants closely enough
 QUANTS = (
+    ("iq4_xs", 0.51), ("q8_0", 1.06), ("q6_k", 0.83), ("q5_k", 0.70),
+    ("q4_k", 0.57), ("q3_k", 0.45), ("iq3", 0.36), ("q2_k", 0.32),
+    ("iq2", 0.24),
     ("4bit", 0.58), ("8bit", 1.10), ("6bit", 0.82), ("7bit", 0.95),
     ("5bit", 0.70), ("3bit", 0.45), ("mxfp4", 0.60),
     ("bf16", 2.05), ("fp16", 2.05), ("f16", 2.05),
@@ -141,24 +146,25 @@ def ram_estimate_gb(mid: str, lf_entry: dict | None = None,
                     size: str = "") -> int | None:
     """Best-effort RAM estimate (GB) for listings, honest about ignorance:
 
-    1. the llmfit catalog's recommended_ram_gb (knows exotic quant names)
+    1. the weights' actual disk size + ~15% headroom — for an installed
+       model this is ground truth; the catalog's recommended_ram_gb lags
+       exotic re-quants badly (a 95.8G MoE was "27GB")
     2. repo-name parsing (params × bytes/param, table fallback)
-    3. the weights' actual disk size + ~15% headroom — RAM can't be smaller
-       than the model on disk
+    3. the llmfit catalog's recommended_ram_gb (knows some odd names)
     None: print '?' rather than invent a number."""
-    if lf_entry:
-        n = lf_entry.get("recommended_ram_gb")
-        if isinstance(n, (int, float)) and n > 0:
-            return int(n)
-    rn = ram_need_gb(mid)
-    if rn is not None:
-        return rn
     if size:
         m = re.match(r"([\d.]+)\s*([KMG])", size)
         if m:
             gb = (float(m.group(1))
                   * {"K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1.0}[m.group(2)])
             return max(1, round(gb * 1.15))
+    rn = ram_need_gb(mid)
+    if rn is not None:
+        return rn
+    if lf_entry:
+        n = lf_entry.get("recommended_ram_gb")
+        if isinstance(n, (int, float)) and n > 0:
+            return int(n)
     return None
 
 

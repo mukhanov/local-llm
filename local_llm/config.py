@@ -38,6 +38,9 @@ class Config:
     # 110k: the KV ceiling of the 122B-class on a 16GB cache is ~174k, but
     # sessions that actually live near it OOM the machine under pressure.
     max_ctx: int
+    # llama-server binary for GGUF models: explicit path, or empty = PATH,
+    # or the managed download under ~/.ollmlx/llama.cpp (llamacpp.py)
+    llama_server: str
 
     @property
     def venv_python(self) -> Path:
@@ -84,4 +87,5 @@ class Config:
             ),
             load_timeout=int(os.environ.get("LOAD_TIMEOUT", "900")),
             max_ctx=int(os.environ.get("MLX_MAX_CTX", "110000")),
+            llama_server=os.environ.get("OLLMLX_LLAMA_SERVER", ""),
         )

@@ -8,8 +8,10 @@ requires-python = ">=3.12"
 dependencies = [
     # MLX server (OpenAI API) — pulls in mlx/mlx-metal for the current chip
     "mlx-lm>=0.25",
-    # snapshot_download, HF API; targets the hub 1.x cache layout
-    "huggingface-hub>=1.0",
+    # snapshot_download, HF API; targets the hub 1.x cache layout. transformers
+    # 5.x already forbids 2.x (httpx2 rewrite); the cap keeps it explicit if
+    # that ever changes — hf.py scans blobs/ and .incomplete files directly.
+    "huggingface-hub>=1.0,<2.0",
     # monitor: per-core CPU, process RSS
     "psutil>=5.9",
 ]

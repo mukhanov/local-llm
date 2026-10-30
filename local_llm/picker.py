@@ -23,10 +23,16 @@ def pick_model(cfg) -> str | None:
     recommended = models.recommend_for_ram(sys_ram)
     lf = llmfit.load(cfg.ollmlx_home)  # {repo: entry} | None
     try:
-        return pick_tui(cfg, sys_ram, recommended, lf)
-    except EnvError:
-        ui.warn("TUI unavailable in this terminal — showing a plain list")
-        return pick_plain(cfg, sys_ram, recommended, lf)
+        try:
+            return pick_tui(cfg, sys_ram, recommended, lf)
+        except EnvError:
+            ui.warn("TUI unavailable in this terminal — showing a plain list")
+            return pick_plain(cfg, sys_ram, recommended, lf)
+    except KeyboardInterrupt:
+        # Ctrl-C in the TUI (or at the fallback prompt) is a cancel,
+        # not a crash: same as ESC/q — a bare traceback here once sent
+        # the user chasing a bug that wasn't there
+        return None
 
 
 # --- curses TUI ----------------------------------------------------------------
@@ -58,6 +64,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
     ranked: list[tuple[float, str, int, int]] = []   # (score, repo, dl, likes)
     sort_mode, query, searching = "fit", "", False
     scope = "community"   # "community": mlx-community org | "all": any author
+    fmt = "mlx"           # "mlx" | "gguf" — the model format to browse
     cursor = scroll_off = 0
     status, confirm = "", None
 
@@ -92,14 +99,16 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                 continue
             e = (lf or {}).get(rid)
             sc, rn, total, active = models.score(sys_ram, rid, 0)
-            rn = rn if rn is not None else (  # exotic quant names don't parse
-                e.get("recommended_ram_gb") if e else None)
+            # installed rows can use the real disk size too — the best of
+            # the three estimates (catalog > name-parse > size + headroom)
+            rn = models.ram_estimate_gb(rid, e, size=sz)
             ents.append(dict(id=rid, inst=True, size=sz, dling=dling,
                              dl=(e.get("hf_downloads") or 0) if e else 0,
                              likes=(e.get("hf_likes") or 0) if e else 0,
                              sc=sc, rn=rn, total=total, active=active,
                              ctx=llmfit.ctx_str(e) if e else None,
                              tools=bool(e and llmfit.has_tools(e)),
+                             gguf="gguf" in rid.lower(),
                              lfsc=llmfit.score(e, sys_ram) if e else None))
         if sort_mode == "fit":
             ents.sort(key=srt_key)
@@ -116,6 +125,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
                             likes=m["likes"], sc=sc, rn=rn, total=total,
                             active=active, ctx=llmfit.ctx_str(e) if e else None,
                             tools=bool(e and llmfit.has_tools(e)),
+                            gguf=(fmt == "gguf" or "gguf" in m["id"].lower()),
                             lfsc=llmfit.score(e, sys_ram) if e else None))
         rem.sort(key=srt_key if sort_mode == "fit"
                  else lambda e: (-e["dl"], -(e["lfsc"]["score"] if e["lfsc"] else e["sc"])))
@@ -128,7 +138,7 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         is unavailable (offline without a cache)."""
         nonlocal ranked
         ranked = []
-        if not lf:
+        if not lf or fmt == "gguf":
             return
         for rid, e in lf.items():
             if scope == "community" and not rid.startswith("mlx-community/"):
@@ -143,7 +153,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         if not has_more:
             status = " all pages loaded"
             return
-        label = "all MLX" if scope == "all" else "mlx-community"
+        label = ("GGUF" if fmt == "gguf"
+                 else "all MLX" if scope == "all" else "mlx-community")
         if ranked:
             # local ranking of the whole catalog slice — no network needed
             page = ranked[skip:skip + LIMIT]
@@ -157,9 +168,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             return
         status = f" loading models {skip + 1}–{skip + LIMIT} from HF ({label})…"
         draw()
-        stdscr.refresh()
         try:
-            page = hf.fetch_page(skip, LIMIT, cfg.hf_token, scope)
+            page = hf.fetch_page(skip, LIMIT, cfg.hf_token, scope, fmt=fmt)
         except Exception as exc:
             status = f" HF API unavailable: {exc}"
             return
@@ -172,20 +182,27 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
 
     def run_search():
         """Fetch the search term server-side: local / filters only what's
-        already loaded, but a fresh re-quant may not be on any page yet."""
+        already loaded, but a fresh re-quant may not be on any page yet.
+        In MLX mode the GGUF catalog is asked too — a `-GGUF` repo never
+        matches an MLX filter, yet it's exactly what a search should find
+        (rows are marked · GGUF and run on llama-server when selected)."""
         nonlocal remote, status
         status = f" searching HF for “{query}”…"
         draw()
-        stdscr.refresh()
         try:
-            found = hf.fetch_page(0, LIMIT, cfg.hf_token, scope, query)
+            found = hf.fetch_page(0, LIMIT, cfg.hf_token, scope, query, fmt)
+            if fmt == "mlx":
+                found += hf.fetch_page(0, LIMIT, cfg.hf_token, scope, query,
+                                       "gguf")
         except Exception as exc:
             status = f" HF search failed: {exc}"
             return
         known = {m["id"] for m in remote}
         fresh = [m for m in found if m["id"] not in known]
         remote += fresh
-        status = f" HF search: +{len(fresh)} model(s)"
+        n_gguf = sum(1 for m in fresh if "gguf" in m["id"].lower())
+        status = (f" HF search: +{len(fresh)} model(s)"
+                  + (f" (+{n_gguf} GGUF)" if n_gguf else ""))
 
     def draw():
         nonlocal cursor, scroll_off
@@ -195,7 +212,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
         for e in ents:
             kind = "inst" if e["inst"] else "remote"
             if kind != prev:
-                src = "all MLX" if scope == "all" else "mlx-community"
+                src = ("GGUF" if fmt == "gguf"
+                       else "all MLX" if scope == "all" else "mlx-community")
                 how = "by score" if sort_mode == "fit" else "by downloads"
                 title = ("💿 Installed (✓ ready · ⬇ downloading)" if kind == "inst"
                          else f"☁ HuggingFace · {src} · {how}")
@@ -240,12 +258,26 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             if e["inst"]:
                 right = (f"{e['size']} so far" if e["dling"]
                          else f"{e['size']} on disk")
+                ram = f"~{e['rn']:.0f}GB" if e["rn"] is not None else "?GB"
+                moe = " · MoE" if e["active"] else ""
+                right += f" · {ram} RAM{moe}"
+                if e["gguf"]:
+                    right += " · GGUF"
+                if e["dl"] or e["likes"]:   # catalog knows this repo
+                    right += (f" · ↓{ui.human_downloads(e['dl'])}"
+                              f" · ⭐{e['likes']}")
                 if e["ctx"]:
                     right += f" · ctx {e['ctx']}"
+                if e["tools"]:
+                    right += " · tools"
+                if e["rn"] is not None and e["rn"] > sys_ram:
+                    right += " ⚠won't fit"
             else:
                 ram = f"~{e['rn']:.0f}GB" if e["rn"] is not None else "?GB"
                 moe = " · MoE" if e["active"] else ""
                 right = f"{ram} RAM{moe} · ↓{ui.human_downloads(e['dl'])} · ⭐{e['likes']}"
+                if e["gguf"]:
+                    right += " · GGUF"
                 if e["ctx"]:
                     right += f" · ctx {e['ctx']}"
                 if e["tools"]:
@@ -257,7 +289,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             mark = ("▸ " if i == cur_row else "  ") + \
                 ("⬇ " if e["inst"] and e["dling"]
                  else "✓ " if e["inst"] else "  ")
-            rec = " ★" if e["id"] == recommended else ""
+            rec = (" ★" if e["id"] == recommended else "") + (
+                " 🔒" if e["id"] == cfg.small_model else "")
             name_w = max(10, w - len(mark) - len(right) - 3)
             nm = e["id"] if len(e["id"]) <= name_w else e["id"][:name_w - 1] + "…"
             pad = max(1, w - 1 - len(mark) - len(nm) - len(rec) - len(right))
@@ -295,7 +328,8 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             hint = f" search: {query}█   Enter — apply (+HF) · Esc — clear"
         else:
             hint = (" j/k↑↓ PgUp/PgDn g/G · / search · l more · s sort ·"
-                    " a all⇄community · d delete · Enter select · q cancel")
+                    " f MLX⇄GGUF · a all⇄community · d delete ·"
+                    " Enter select · q cancel")
         add(h - 2, 0, hint, DIM)
         if confirm is not None:
             warn = " — still downloading elsewhere!" if confirm["dling"] else ""
@@ -368,7 +402,17 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             sort_mode = "dl" if sort_mode == "fit" else "fit"
             cursor = scroll_off = 0
         elif ch in (ord("a"), ord("A")):
-            scope = "all" if scope == "community" else "community"
+            if fmt == "gguf":
+                # scope filters MLX orgs; GGUF browsing is filter=gguf only
+                status = " a switches MLX scope — press f to leave GGUF first"
+            else:
+                scope = "all" if scope == "community" else "community"
+                remote, skip, has_more = [], 0, True
+                cursor = scroll_off = 0
+                build_ranked()
+                load_more()
+        elif ch == ord("f"):
+            fmt = "gguf" if fmt == "mlx" else "mlx"
             remote, skip, has_more = [], 0, True
             cursor = scroll_off = 0
             build_ranked()
@@ -377,7 +421,11 @@ def _tui(stdscr, cfg, sys_ram: int, recommended: str, lf: dict | None,
             searching = True
         elif ch == ord("d"):
             if ents and ents[cursor]["inst"]:
-                confirm = ents[cursor]
+                if ents[cursor]["id"] == cfg.small_model:
+                    status = (" 🔒 helper model (fast/background calls) —"
+                              " not deletable")
+                else:
+                    confirm = ents[cursor]
             else:
                 status = " d deletes installed models — this one isn't downloaded"
 
@@ -424,7 +472,8 @@ def pick_plain(cfg, sys_ram: int, recommended: str, lf: dict | None = None) -> s
     if installed:
         print("   💿 Installed models (start without downloading):\n")
         for rid, size, dling in installed:
-            mark = " ★ " if rid == recommended else "   "
+            mark = (("★" if rid == recommended else " ")
+                    + ("🔒" if rid == cfg.small_model else " ")) + " "
             print(f"{mark}{i:2d}) {rid}")
             print(f"      {models.describe(rid)}")
             state = f"⬇ {size} so far (still downloading)" if dling \

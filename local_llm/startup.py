@@ -1,6 +1,6 @@
-"""Fullscreen startup dialog: while the stack boots, a centered panel with
-a spinner and the live boot log replaces scrolling terminal text; when the
-boot finishes, the caller takes the terminal straight to the monitor.
+"""Fullscreen startup dialog: while the stack boots, the whole screen is a
+spinner header plus the live boot log (tail at the bottom border); when
+the boot finishes, the caller takes the terminal straight to the monitor.
 
 The boot runs with stdout/stderr redirected into a QueueWriter, so every
 existing print (download progress, server readiness, warmup) shows up in
@@ -75,10 +75,12 @@ def dialog(model: str, q: queue.Queue, done, result: dict) -> None:
             code = result.get("code") if done.is_set() else None
             ok = code == 0
             failed = done.is_set() and not ok
-            bw = min(max(56, len(short) + 22), max(24, w - 2))
-            rows = max(5, min(h - 4, 12))
-            y0 = max(0, (h - rows - 2) // 2)
-            x0 = max(0, (w - bw) // 2)
+            # full bleed: the boot log owns the whole screen (a small
+            # centered box left most of a tall terminal unused); bw = w-1
+            # keeps the right border off the auto-wrap last column
+            bw = max(24, w - 1)
+            rows = max(5, h)
+            y0 = x0 = 0
 
             def add(yy, xx, text, attr=0):
                 try:

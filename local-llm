@@ -2,7 +2,18 @@
 # local-llm — launcher: sets up the venv (dependencies come from pyproject.toml)
 # and runs the package. All the logic lives in local_llm/.
 set -e
-APP_DIR=$(cd "$(dirname "$0")" && pwd)
+# $0 may be a symlink (~/bin/local-llm -> this checkout): resolve it, or
+# APP_DIR becomes ~/bin and uv looks for pyproject.toml in the wrong place
+SELF=$0
+while [ -L "$SELF" ]; do
+  LINK_DIR=$(cd "$(dirname "$SELF")" && pwd -P)
+  SELF=$(readlink "$SELF")
+  case $SELF in
+    /*) ;;
+    *) SELF=$LINK_DIR/$SELF ;;
+  esac
+done
+APP_DIR=$(cd "$(dirname "$SELF")" && pwd -P)
 OLLMLX="${OLLMLX_HOME:-$HOME/.ollmlx}"
 VENV="$OLLMLX/venv"
 STAMP="$OLLMLX/venv.deps"   # pyproject.toml hash of the last install

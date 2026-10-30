@@ -5,22 +5,32 @@ the pi/omp/claude launch commands and a tail of the logs with errors.
 Blocks until q/Ctrl-C (cli stops the servers).
 
 The tok/s numbers come from TOKPS lines that our mlx_lm.server wrapper
-(local_llm.mlxwrap) prints into /tmp/mlx-server.log and
-/tmp/mlx-small.log ~once a second."""
+(local_llm.mlxwrap) prints into ~/.ollmlx/logs/mlx-server.log and
+~/.ollmlx/logs/mlx-small.log ~once a second; GGUF stacks (llama-server)
+have no wrapper — their per-request perf lines are parsed instead."""
 import collections
 import curses
 import os
 import re
 import socket
+import subprocess
 import sys
 import time
 
 import psutil
 
 from . import ui
-from .servers import MLX_SMALL_LOG, WATCHDOG_LOG
+from .applog import log
+from .servers import (LITELLM_LOG, LLAMA_LOG, MLX_LOG, MLX_SMALL_LOG,
+                      WATCHDOG_LOG)
 
-LOGS = (("mlx", "/tmp/mlx-server.log"), ("litellm", "/tmp/litellm.log"))
+LOGS = (("mlx", MLX_LOG), ("litellm", LITELLM_LOG))
+
+# wheel bits from THIS ncurses runtime; the python curses module (built
+# against Apple's ncurses 6.0) ships no BUTTON5_PRESSED constant — 1<<27
+# is the bit the C library actually sets (verified with a pty probe)
+_WHEEL_UP = getattr(curses, "BUTTON4_PRESSED", 1 << 19)
+_WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 1 << 27)
 
 
 class _UiSink:
@@ -55,27 +65,37 @@ class _UiSink:
 
 
 def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str,
-        small_port: int = 0) -> None:
-    """Blocks until exit (q / Ctrl-C). small_port=0 — no helper model."""
+        small_port: int = 0, backend: str = "mlx") -> None:
+    """Blocks until exit (q / Ctrl-C). small_port=0 — no helper model.
+    backend "llama" — the model port is llama-server (GGUF): its log and
+    perf lines replace the mlx ones."""
     global LOGS
+    model_log = (("llama", LLAMA_LOG) if backend == "llama"
+                 else ("mlx", MLX_LOG))
+    LOGS = (model_log, ("litellm", LITELLM_LOG))
     if small_port:
         LOGS = LOGS + (("mlx-small", MLX_SMALL_LOG),)
     LOGS = LOGS + (("watchdog", WATCHDOG_LOG),)
     ui.force_utf8_locale()
     ui.force_compatible_term()
+    log.info("monitor: up (model=%s backend=%s mlx=:%d litellm=:%d small=:%d)",
+             model, backend, mlx_port, lite_port, small_port)
     # while the curses UI owns the screen, stray prints must not reach the
     # terminal (a watchdog restart printing "ready in 3s" over the grid
     # shredded the display) — route them into the watchdog log instead
     sink = _UiSink(WATCHDOG_LOG)
     old = sys.stdout, sys.stderr
     sys.stdout = sys.stderr = sink
+    _alt_scroll(True)
     try:
         curses.wrapper(lambda scr: _main(
-            scr, model, mlx_port, lite_port, claude_cfg, small_port))
+            scr, model, mlx_port, lite_port, claude_cfg, small_port, backend))
     except KeyboardInterrupt:
         pass
     finally:
+        _alt_scroll(False)
         sys.stdout, sys.stderr = old
+    log.info("monitor: exit")
     # the tab title's save/restore belongs to the app level (cli.main
     # pushed at startup and pops at exit), not to the monitor
 
@@ -95,16 +115,15 @@ def top_eaters(k: int = 3, exclude_pids=()) -> list:
     excluded: they are listed separately with their own RSS."""
     me = os.getpid()
     best = []
-    for p in psutil.process_iter(["pid", "name", "memory_info"]):
+    for p in _safe_process_iter():
         try:
-            info = p.info
-            if info["pid"] in (0, me) or info["pid"] in exclude_pids:
+            if p.pid in (0, me) or p.pid in exclude_pids:
                 continue
-            rss = info["memory_info"].rss if info["memory_info"] else 0
+            rss = p.memory_info().rss
             if rss < 300 * 1024 * 1024:   # sub-300MB is not a lever
                 continue
-            best.append((rss, info["pid"], os.path.basename(info["name"] or "?")))
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            best.append((rss, p.pid, os.path.basename(p.name() or "?")))
+        except (psutil.Error, OSError, SystemError):
             continue
     best.sort(reverse=True)
     return best[:k]
@@ -155,14 +174,34 @@ def port_ok(port: int) -> bool:
         return False
 
 
-def watch_procs(small_port: int = 0):
-    """[(label, Process)] for mlx/litellm; process_iter caches instances,
-    so cpu_percent() between frames yields meaningful deltas."""
-    out = []
-    for p in psutil.process_iter(["pid", "cmdline"]):
+def _safe_process_iter():
+    """psutil.process_iter() with no attrs, hardened: macOS denies
+    sysctl(KERN_PROCARGS2) for other users' processes, and current
+    psutil/macOS builds leak that as SystemError/PermissionError instead
+    of the AccessDenied that as_dict() would skip — so attrs-based
+    iteration dies mid-generator (and took the TUI down with it).
+    Attrs must be fetched by the caller under try/except; instance
+    caching still lives in process_iter, keeping cpu_percent() deltas."""
+    it = psutil.process_iter()
+    while True:
         try:
-            cmd = " ".join(p.info["cmdline"] or ())
-        except Exception:
+            p = next(it)
+        except StopIteration:
+            return
+        except (psutil.Error, OSError, SystemError):
+            continue   # one unreadable pid must not end the scan
+        yield p
+
+
+def watch_procs(small_port: int = 0, mlx_port: int = 0):
+    """[(label, Process)] for the model server(s)/litellm; process_iter
+    caches instances, so cpu_percent() between frames yields meaningful
+    deltas."""
+    out = []
+    for p in _safe_process_iter():
+        try:
+            cmd = " ".join(p.cmdline() or ())
+        except (psutil.Error, OSError, SystemError):
             continue
         if "mlx_lm.server" in cmd or "local_llm.mlxwrap" in cmd:
             # the helper is told apart by its --port (the big model's id
@@ -170,6 +209,11 @@ def watch_procs(small_port: int = 0):
             label = ("mlx-small" if small_port and f"--port {small_port}" in cmd
                      else "mlx_lm.server")
             out.append((label, p))
+        elif ("llama-server" in cmd
+              and (not mlx_port or f"--port {mlx_port}" in cmd)):
+            # ours only: the port tells it apart from an unrelated
+            # llama-server the user runs for something else
+            out.append(("llama-server", p))
         elif "litellm" in cmd and "--config" in cmd:
             out.append(("litellm", p))
     return out
@@ -187,6 +231,20 @@ def _set_title(text: str) -> None:
     try:
         out = sys.__stdout__ or sys.stdout
         out.write(f"\x1b]0;{text}\x07")
+        out.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def _alt_scroll(on: bool) -> None:
+    """DECSET 1007: while the alternate screen is up, the terminal turns
+    the mouse wheel into arrow keys instead of scrolling its own
+    scrollback (which holds old monitor frames — the graphs' history).
+    The arrows land in our log-box scroller. Terminals without 1007
+    (Terminal.app) keep their old wheel behavior."""
+    try:
+        out = sys.__stdout__ or sys.stdout
+        out.write("\x1b[?1007h" if on else "\x1b[?1007l")
         out.flush()
     except (OSError, ValueError):
         pass
@@ -264,12 +322,46 @@ _TOKPS_LIVE = re.compile(r"^TOKPS live #(\d+) ([\d.]+)")
 _TOKPS_PRE = re.compile(r"^TOKPS prefill #(\d+) (\d+)")
 _TOKPS_DONE = re.compile(r"^TOKPS done (.+)")
 
+# llama-server has no TOKPS lines; its per-request perf summaries stand in
+# (format verified on build b11899). The prompt line is checked first —
+# "prompt eval time" contains "eval time" as a substring.
+_LLAMA_PRE = re.compile(r"prompt eval time =\s*[\d.]+ ms /\s*(\d+) tokens"
+                        r".*?([^\s(,]+) tokens per second")
+_LLAMA_EVAL = re.compile(r"(?<!prompt )eval time =\s*[\d.]+ ms /\s*(\d+)"
+                         r" (?:runs|tokens).*?([^\s(,]+) tokens per second")
+
+
+def _llama_perf(data: str):
+    """(eval_seq, eval_rate, pre_seq, pre_rate, summary) from llama-server
+    perf lines: each new line is one 'seq' tick at that rate, so the state
+    machine in draw_toks treats them exactly like TOKPS lines."""
+    n_eval = n_pre = 0
+    rate = pre_rate = 0.0
+    summary = ""
+    for l in data.splitlines():
+        if m := _LLAMA_PRE.search(l):
+            n_pre += 1
+            pre_rate = _safe_float(m[2])
+        elif m := _LLAMA_EVAL.search(l):
+            n_eval += 1
+            rate = _safe_float(m[2])
+            summary = f"{m[1]} tokens at {rate:.1f} tok/s"
+    return n_eval, rate, n_pre, pre_rate, summary
+
+
+def _safe_float(s: str) -> float:
+    try:
+        return float(s)          # "inf" (0-time prompt eval) -> 0, not a crash
+    except ValueError:
+        return 0.0
+
 
 def tail_tokps(path: str):
     """(live_seq, live_rate, pre_seq, pre_rate, summary) from the last TOKPS
     lines of the log tail. The seq numbers advance ~1/s while the model
     generates, so an unchanged seq means "not generating right now" — that's
-    how the monitor tells a live rate from a stale line."""
+    how the monitor tells a live rate from a stale one. GGUF runs fall back
+    to llama-server perf lines (one tick per request, no live rate)."""
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
@@ -286,13 +378,17 @@ def tail_tokps(path: str):
             pre = (int(m[1]), int(m[2]))
         elif m := _TOKPS_DONE.match(l):
             summary = m[1]
+    if live[0] < 0 and pre[0] < 0:
+        return _llama_perf(data)
     return live[0], live[1], pre[0], pre[1], summary
 
 
-def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
+def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port,
+          backend="mlx") -> None:
     client_cmds = (
         ("pi", "pi --model ollmlx/local"),
         ("omp", "omp --model ollmlx/local"),
+        ("opencode", "opencode --model ollmlx/local"),
         ("claude", f"claude --settings {claude_cfg}"),
     )
     start = time.time()
@@ -316,8 +412,13 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         curses.init_pair(i, fg, bg)
     B = curses.A_BOLD
     psutil.cpu_percent(percpu=True)  # priming: the first call is always 0
-    watch_procs(small_port)
+    watch_procs(small_port, mlx_port)
     stdscr.timeout(1000)
+    # mouse reporting claims the wheel: the terminal then sends wheel
+    # events to the app instead of scrolling its own scrollback (old
+    # monitor frames). 1007 alone wasn't enough — not every terminal
+    # implements alternate-scroll mode.
+    curses.mousemask(curses.ALL_MOUSE_EVENTS | _WHEEL_UP | _WHEEL_DOWN)
     curses.flushinp()  # drop terminal replies to curses init queries (ESC[...])
 
     def uptime() -> str:
@@ -357,11 +458,13 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         total = sum(percpu) / len(percpu) if percpu else 0.0
         cpu_hist.append(total)
         vm, sw = psutil.virtual_memory(), psutil.swap_memory()
-        procs = watch_procs(small_port)
+        procs = watch_procs(small_port, mlx_port)
 
         # --- header ---
         put(f" ollmlx — {model}", B | curses.color_pair(4))
-        mlx = f"mlx :{mlx_port} ●up" if port_ok(mlx_port) else f"mlx :{mlx_port} ○down"
+        srv_tag = "llama" if backend == "llama" else "mlx"
+        mlx = (f"{srv_tag} :{mlx_port} ●up" if port_ok(mlx_port)
+               else f"{srv_tag} :{mlx_port} ○down")
         small = (f"small :{small_port} ●up" if port_ok(small_port)
                  else f"small :{small_port} ○down") if small_port else ""
         lit = (f"litellm :{lite_port} ●up" if port_ok(lite_port)
@@ -640,12 +743,9 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
                 box_sides(first + i, 0, w - 1)
             box_bottom(lt + height - 1, 0, w - 1)
 
-        logs = ("/tmp/mlx-server.log, /tmp/mlx-small.log, /tmp/litellm.log"
-                ", /tmp/mlx-watchdog.log"
-                if small_port else
-                "/tmp/mlx-server.log, /tmp/litellm.log, /tmp/mlx-watchdog.log")
+        logs = ", ".join(path for _, path in LOGS)
         add(h - 1, 0,
-            f" q — quit · ↑↓ PgUp/PgDn scroll logs | logs: {logs}",
+            f" q — quit · ↑↓ wheel PgUp/PgDn scroll logs | logs: {logs}",
             curses.A_DIM)
         stdscr.refresh()
 
@@ -653,7 +753,17 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port) -> None:
         if ch in (ord("q"), ord("Q")):
             return
         page = max(1, (h - 6) // 2)
-        if ch in (curses.KEY_UP, ord("k")):
+        if ch == curses.KEY_MOUSE:
+            # the wheel scrolls the log box; clicks/drags are ignored
+            try:
+                bstate = curses.getmouse()[4]
+            except curses.error:
+                bstate = 0
+            if bstate & _WHEEL_UP:
+                log_off += 3
+            elif bstate & _WHEEL_DOWN:
+                log_off = max(0, log_off - 3)
+        elif ch in (curses.KEY_UP, ord("k")):
             log_off += 1
         elif ch in (curses.KEY_DOWN, ord("j")):
             log_off = max(0, log_off - 1)

@@ -1,7 +1,9 @@
-"""Client configs: pi/omp (models.json, provider "ollmlx") and claude
+"""Client configs: pi/omp (models.json, provider "ollmlx"), opencode
+(provider merged into ~/.config/opencode/opencode.json) and claude
 (claude-local.json with env pointing at litellm). Clients are always
 launched the same way."""
 import json
+import os
 from pathlib import Path
 
 from . import hf, ui
@@ -105,6 +107,7 @@ def write_client_configs(cfg, model: str, small: bool = True,
         omp_cache.unlink()
         ui.ok(f"{omp_cache} (cached)")
     _write_omp_smol_role(small)
+    _write_opencode(cfg, model, small, ctx)
 
     home = str(Path.home())
     # small-fast + haiku go to the tiny helper — those background calls
@@ -126,4 +129,50 @@ def write_client_configs(cfg, model: str, small: bool = True,
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         }
     }, indent=2) + "\n")
-    ui.ok(str(cfg.claude_cfg).replace(home, "~"))
+
+
+def _write_opencode(cfg, model: str, small: bool, ctx: int) -> None:
+    """opencode: register the "ollmlx" provider in the global
+    ~/.config/opencode/opencode.json — merged, other keys (theme, other
+    providers, permissions) survive; only our provider block is replaced,
+    so the write is idempotent. The session model is picked per run
+    (`opencode --model ollmlx/local`); `small_model` is pinned to the
+    helper only when that slot is empty or already ours. A file we can't
+    parse (opencode also accepts JSONC — comments, trailing commas) is
+    left untouched with a warning rather than clobbered."""
+    f = (Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser()
+         / "opencode" / "opencode.json")
+    data = {}
+    if f.exists():
+        try:
+            data = json.loads(f.read_text())
+        except Exception:
+            ui.warn(f"{f} is not plain JSON (JSONC?) — leaving it"
+                    " untouched; add the ollmlx provider by hand")
+            return
+    models = {"local": {"name": model,
+                        "limit": {"context": ctx,
+                                  "output": min(ctx, 32768)}}}
+    if small:
+        models["small"] = {"name": cfg.small_model}
+    data.setdefault("provider", {})["ollmlx"] = {
+        "npm": "@ai-sdk/openai-compatible",   # /v1/chat/completions
+        "name": "ollmlx (local MLX)",
+        "options": {
+            "baseURL": f"http://127.0.0.1:{cfg.litellm_port}/v1",
+            "apiKey": cfg.api_key,
+            # a ~100k-token prefill streams nothing for minutes — the 5-min
+            # default timeouts would abort the generation mid-flight
+            "timeout": 900000,
+            "chunkTimeout": 900000,
+        },
+        "models": models,
+    }
+    if small and data.get("small_model") in (None, "ollmlx/small"):
+        data["small_model"] = "ollmlx/small"
+    elif not small and data.get("small_model") == "ollmlx/small":
+        data.pop("small_model")   # ours and the helper is off — free the slot
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    ui.ok(str(f).replace(str(Path.home()), "~"))
+
