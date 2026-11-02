@@ -467,7 +467,9 @@ def start_litellm(cfg, model: str, small: bool = True) -> None:
     _write_litellm_config(cfg, model, small)
     env = dict(os.environ)
     # Anthropic bridge /v1/messages -> chat/completions (mlx has no /v1/responses)
-    env["LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES"] = "1"
+    # the proxy binds 127.0.0.1 with the static client key in the config;
+    # newer litellm refuses to boot without a strong master key
+    env["LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY"] = "true"
     logfile = _open_log(LITELLM_LOG)
     cmd = ["litellm", "--config", str(cfg.litellm_cfg),
            "--host", "127.0.0.1", "--port", str(cfg.litellm_port)]

@@ -183,7 +183,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "huggingface-hub", specifier = ">=1.0" },
+    { name = "huggingface-hub", specifier = ">=1.0,<2.0" },
     { name = "mlx-lm", specifier = ">=0.25" },
     { name = "psutil", specifier = ">=5.9" },
 ]
