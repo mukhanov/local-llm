@@ -235,10 +235,21 @@ def stop_watchdog() -> None:
 
 
 def ensure_litellm() -> None:
-    if shutil.which("litellm"):
-        return
+    # a Homebrew python upgrade orphans the uv-tool venv: the binary sits
+    # in PATH but its shebang points at a removed interpreter — verify it
+    # actually runs, not just that it exists.
+    exe = shutil.which("litellm")
+    if exe:
+        try:
+            if subprocess.run([exe, "--version"], capture_output=True,
+                              timeout=60).returncode == 0:
+                return
+        except (OSError, subprocess.SubprocessError):
+            pass
+        ui.warn("litellm found at %s but broken — reinstalling" % exe)
     ui.info("Installing litellm (uv tool)")
-    subprocess.run(["uv", "tool", "install", "litellm"], check=True)
+    subprocess.run(["uv", "tool", "install", "--force", "--python", "3.12",
+                    "litellm[proxy]"], check=True)
 
 
 def _wait_ready(url: str, proc, timeout: int, logpath: str,
