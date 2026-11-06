@@ -130,6 +130,19 @@ configuration decisions needed.
 
 ## Install
 
+### Homebrew
+
+```console
+$ brew tap mukhanov/local-llm
+$ brew install local-llm
+```
+
+Apple Silicon only (MLX). Models, the venv and logs live in `~/.ollmlx`
+and `~/.cache/huggingface` regardless of how you installed; `brew
+upgrade` picks up new releases.
+
+### From a git checkout
+
 From a git checkout — the launcher bootstraps everything on first run:
 
 ```console
