@@ -130,57 +130,56 @@ configuration decisions needed.
 
 ## Install
 
-### Homebrew
+### Homebrew (recommended)
 
 ```console
 $ brew tap mukhanov/local-llm
 $ brew install local-llm
-```
-
-Apple Silicon only (MLX). Models, the venv and logs live in `~/.ollmlx`
-and `~/.cache/huggingface` regardless of how you installed; `brew
-upgrade` picks up new releases.
-
-### From a git checkout
-
-From a git checkout — the launcher bootstraps everything on first run:
-
-```console
-$ git clone https://github.com/<you>/local-llm.git
-$ cd local-llm
-$ ./local-llm                 # creates the venv, installs deps, opens the picker
-```
-
-To have `local-llm` on your PATH, symlink the launcher:
-
-```console
-$ mkdir -p ~/bin && ln -s "$PWD/local-llm" ~/bin/local-llm   # if ~/bin is in PATH
-```
-
-Prefer standard tooling? The package is installable too:
-
-```console
-$ uv tool install .           # or: pipx install .
 $ local-llm
-# or run straight from the checkout without installing:
-$ uv run local-llm
 ```
+
+Upgrade with `brew upgrade local-llm`.
+
+### From source
+
+```console
+$ git clone https://github.com/mukhanov/local-llm.git
+$ cd local-llm
+$ ./local-llm
+```
+
+The first launch creates an isolated Python environment, installs the
+dependencies, and opens the model picker. Later launches reuse that
+environment.
+
+To run the command as `local-llm` instead of `./local-llm`, symlink the
+launcher into a directory on your `PATH`. For example:
+
+```console
+$ mkdir -p ~/.local/bin
+$ ln -s "$PWD/local-llm" ~/.local/bin/local-llm
+```
+
+If necessary, add `~/.local/bin` to your `PATH` first.
 
 ### Dependencies
 
-Dependencies are declared once, in [`pyproject.toml`](pyproject.toml):
-`mlx-lm` (pulls in MLX for your chip), `huggingface-hub`, `psutil`.
-Nothing is installed globally:
+The launcher uses `uv` to manage Python and all packages in isolated
+environments; it does not modify the system Python or require `sudo`.
+Dependencies are declared in [`pyproject.toml`](pyproject.toml).
 
 | What                | Where                          | Installed when              |
 |---------------------|--------------------------------|-----------------------------|
-| Python 3.12         | managed by uv, if none found   | first run (`uv venv`)       |
-| local-llm + deps    | `~/.ollmlx/venv` (editable)    | first run and whenever `pyproject.toml` changes |
-| `litellm`           | uv tool (`~/.local/...`)       | first stack start, if missing |
+| Python 3.12         | managed by uv, if none found   | first launch                |
+| local-llm + deps    | `~/.ollmlx/venv`               | first launch and whenever `pyproject.toml` changes |
+| `litellm`           | isolated uv tool environment   | first stack start, if missing |
 
-The launcher reinstalls dependencies only when `pyproject.toml` changes, so
-regular launches don't touch the network. `git pull` picks up code changes
-immediately thanks to the editable install.
+Regular launches do not reinstall dependencies or access the package index.
+After `git pull`, source code changes take effect immediately; dependency
+changes are installed on the next launch.
+
+Models, configuration, and logs live in `~/.ollmlx` and
+`~/.cache/huggingface`, regardless of the installation method.
 
 ## Usage
 
