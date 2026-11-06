@@ -153,9 +153,10 @@ def _gguf_prepare(cfg: Config, model: str, quant: str | None = None):
         else:
             sizes.update({n: s for n, s in remote if n not in sizes})
             groups = hf.gguf_groups(list(sizes.items()))
-    if not any(hf.gguf_set_complete(g[2]) for g in groups):
+    if groups and not any(hf.gguf_set_complete(g[2]) for g in groups):
         # shard2 without shard1 (fetch in flight or dead) must not reach
-        # llama-server — it refuses anything but the first split
+        # llama-server — it refuses anything but the first split; an empty
+        # group list is an MLX model and falls through to the MLX path
         raise SystemExit(f"   {model}: no complete GGUF shard set locally"
                          " and the HF API is unreachable — retry when"
                          " online; a running fetch keeps its progress")
