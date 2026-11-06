@@ -34,9 +34,10 @@ fi
 # Re-run only when pyproject changes — a regular launch downloads nothing.
 hash=$( (sha256sum "$APP_DIR/pyproject.toml" 2>/dev/null \
          || shasum -a 256 "$APP_DIR/pyproject.toml") | cut -d' ' -f1)
-if [ "$(cat "$STAMP" 2>/dev/null)" != "$hash" ]; then
+stamp="$hash $APP_DIR"
+if [ "$(cat "$STAMP" 2>/dev/null)" != "$stamp" ]; then
   uv pip install --python "$VENV/bin/python" -e "$APP_DIR"
-  printf '%s\n' "$hash" > "$STAMP"
+  printf '%s\n' "$stamp" > "$STAMP"
 fi
 
 exec "$VENV/bin/local-llm" "$@"
