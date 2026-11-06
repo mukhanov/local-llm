@@ -2,7 +2,7 @@
 name = "local-llm"
 dynamic = ["version"]
 description = "One command to run a local LLM on your Mac: model picker, MLX server, OpenAI + Anthropic APIs, Claude Code integration"
-readme = "README.md"
+readme = {text = "One command to run a local LLM on your Mac: a model picker ranked for your RAM, MLX or llama.cpp serving, OpenAI and Anthropic APIs on localhost, client config for pi / omp / Claude Code. https://github.com/mukhanov/local-llm", content-type = "text/plain"}
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
