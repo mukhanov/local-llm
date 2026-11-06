@@ -37,8 +37,8 @@ everything — no daemons left behind.
 ## Features
 
 - **Model picker (TUI)** — installed models first: `✓` ready (green) and
-  `⬇` still downloading in another session (yellow, "N NG
-  so far" — Enter resumes it; finished blobs are reused). Both kinds of
+  `⬇` still downloading in another session (yellow, live "14.0G so far"
+  — Enter resumes it; finished blobs are reused). Both kinds of
   row carry the full llmfit field set — disk size, RAM estimate (from
   the weights on disk), MoE, downloads/likes, context, tools — then the
   catalog candidates ranked by score. `d` on an installed row deletes
@@ -117,7 +117,7 @@ everything — no daemons left behind.
 - **HF token support** — for gated models and API limits; stored outside the
   repo in `~/.ollmlx/hf-token` (chmod 600).
 - **DoH-pinned DNS** — resolves `*.hf.co` via 1.1.1.1 when your TUN proxy
-  hands out fake IPs and downloads die on TLS (see [Troubleshooting](#troubleshooting))).
+  hands out fake IPs and downloads die on TLS (see [Troubleshooting](#troubleshooting)).
 
 ## Requirements
 
@@ -189,7 +189,6 @@ until SIGTERM/SIGINT — for bots and launchd jobs that need the model only
 for a while; a port collision exits non-zero without touching a foreign
 stack.
 
-
 ### GGUF models (llama.cpp)
 
 GGUF repos (`…-GGUF`) run on **llama-server** from
@@ -211,12 +210,12 @@ Point `OLLMLX_LLAMA_SERVER` at your own binary to use that instead.
 
 While the stack is up:
 
-| Client     | Command                                       |
-|------------|-----------------------------------------------|
-| pi         | `pi --model ollmlx/local`                     |
-| omp        | `omp --model ollmlx/local`                    |
-| OpenCode   | `opencode --model ollmlx/local`               |
-| Claude Code| `claude --settings ~/.ollmlx/claude-local.json` |
+| Client      | Command                                        |
+|-------------|------------------------------------------------|
+| pi          | `pi --model ollmlx/local`                      |
+| omp         | `omp --model ollmlx/local`                     |
+| OpenCode    | `opencode --model ollmlx/local`                |
+| Claude Code | `claude --settings ~/.ollmlx/claude-local.json` |
 
 Or talk to the API directly (both endpoints on the litellm port `:4000`):
 
@@ -241,7 +240,7 @@ $ curl http://127.0.0.1:4000/v1/messages \
 | `l`            | load next page from HuggingFace         |
 | `s`            | sort: hardware fit ⇄ downloads          |
 | `a`            | catalog: `mlx-community` ⇄ all MLX models |
-| `d`            | delete selected installed model         |
+| `d`            | delete selected installed model (the 🔒 helper is protected) |
 | `Enter`        | select and run                          |
 | `q` `Esc`      | cancel                                  |
 
@@ -287,21 +286,21 @@ title back.
 
 All via environment variables:
 
-| Variable                  | Default      | Meaning                                    |
-|---------------------------|--------------|--------------------------------------------|
-| `MLX_PORT`                | `19797`      | mlx_lm.server port (OpenAI API)            |
-| `LITELLM_PORT`            | `4000`       | litellm proxy port (OpenAI + Anthropic)    |
-| `OLLMLX_SMALL_MODEL`      | `mlx-community/Qwen3-0.6B-4bit` | tiny helper model |
-| `MLX_SMALL_PORT`          | `8081`       | helper model port (`ollmlx/small`)         |
-| `MLX_KV_BITS`             | `0`          | KV quantization; breaks prompt-cache hits on long contexts — only for ~100G models. GGUF: `8` maps to llama-server's q8_0 KV cache |
-| `OLLMLX_LLAMA_SERVER`     | —            | your own llama-server binary for GGUF models (default: managed download into `~/.ollmlx/llama.cpp`, pinned to one build) |
-| `MLX_KV_GROUP_SIZE`       | `64`         | KV-cache group size                        |
-| `MLX_PROMPT_CACHE_BYTES`  | `17179869184` | prompt-cache cap (16GB ≈ 136k tokens on the 122B), `0` = unlimited |
-| `MLX_MAX_CTX`             | `110000`     | hard context ceiling (tokens): advertised to clients so they compact early, enforced by the server as a clean "context too long" refusal; `0` = KV-budget only |
-| `LOAD_TIMEOUT`            | `900`        | seconds to wait for weights to load |
-| `OLLMLX_HOME`             | `~/.ollmlx`  | venv, litellm config, token, claude config |
-| `HF_HUB_CACHE`            | `~/.cache/huggingface/hub` | model cache path           |
-| `HF_TOKEN`                | —            | HuggingFace token (or `local-llm token`)   |
+| Variable                 | Default                        | Meaning |
+|--------------------------|--------------------------------|---------|
+| `MLX_PORT`               | `19797`                        | mlx_lm.server port (OpenAI API) |
+| `LITELLM_PORT`           | `4000`                         | litellm proxy port (OpenAI + Anthropic) |
+| `OLLMLX_SMALL_MODEL`     | `mlx-community/Qwen3-0.6B-4bit` | tiny helper model for fast/background calls; marked 🔒 in lists and protected from deletion |
+| `MLX_SMALL_PORT`         | `8081`                         | helper model port (`ollmlx/small`) |
+| `MLX_KV_BITS`            | `0`                            | KV quantization; breaks prompt-cache hits on long contexts — only for ~100G models. GGUF: `8` maps to llama-server's q8_0 KV cache |
+| `MLX_KV_GROUP_SIZE`      | `64`                           | KV-cache group size |
+| `MLX_PROMPT_CACHE_BYTES` | `17179869184`                  | prompt-cache cap (16GB ≈ 136k tokens on the 122B), `0` = unlimited |
+| `MLX_MAX_CTX`            | `110000`                       | hard context ceiling (tokens): advertised to clients so they compact early, enforced by the server as a clean "context too long" refusal; `0` = KV-budget only |
+| `LOAD_TIMEOUT`           | `900`                          | seconds to wait for weights to load |
+| `OLLMLX_LLAMA_SERVER`    | —                              | your own llama-server binary for GGUF models (default: managed download into `~/.ollmlx/llama.cpp`, pinned to one build) |
+| `OLLMLX_HOME`            | `~/.ollmlx`                    | venv, litellm config, token, claude config |
+| `HF_HUB_CACHE`           | `~/.cache/huggingface/hub`     | model cache path |
+| `HF_TOKEN`               | —                              | HuggingFace token (or `local-llm token`) |
 
 KV quantization matters on big models: long prompts (~30k tokens) with a full
 16-bit cache can exhaust RAM on a model that "fits", which kills the Metal
@@ -309,18 +308,18 @@ generation thread — 8-bit keeps a 100GB-class model stable in 128GB RAM.
 
 ## Files
 
-| Path                                  | Purpose                          |
-|---------------------------------------|----------------------------------|
-| `~/.ollmlx/venv`                      | isolated Python environment      |
-| `~/.ollmlx/hf-token`                  | HF token, chmod 600              |
+| Path                                  | Purpose |
+|---------------------------------------|---------|
+| `~/.ollmlx/venv`                      | isolated Python environment |
+| `~/.ollmlx/hf-token`                  | HF token, chmod 600 |
 | `~/.ollmlx/llama.cpp/`                | llama-server binaries (GGUF backend, one pinned build) |
-| `~/.ollmlx/litellm-config.yaml`       | generated proxy config           |
-| `~/.ollmlx/claude-local.json`         | Claude Code settings             |
-| `~/.pi/agent/models.json`             | `pi` model catalog (merged)      |
-| `~/.omp/agent/models.json`            | `omp` model catalog (merged)     |
+| `~/.ollmlx/litellm-config.yaml`       | generated proxy config |
+| `~/.ollmlx/claude-local.json`         | Claude Code settings |
+| `~/.ollmlx/logs/*.log`                | app + server logs (`app.log` — the app's own, with crash tracebacks; `.log.1` — the previous run) |
+| `~/.pi/agent/models.json`             | `pi` model catalog (merged) |
+| `~/.omp/agent/models.json`            | `omp` model catalog (merged) |
 | `~/.config/opencode/opencode.json`    | `opencode` global config (ollmlx provider merged in) |
-| `~/.cache/huggingface/hub`            | downloaded models                |
-| `~/.ollmlx/logs/*.log` | app + server logs (`app.log` — app's own, with crash tracebacks; `.log.1` — the previous run) |
+| `~/.cache/huggingface/hub`            | downloaded models |
 
 Deleting models (`local-llm rm`) is aware of the hub 1.x shared blob store
 (`hub/blobs/<xx>/<sha>`): it frees the real weights and never touches blobs
@@ -347,10 +346,14 @@ shared with another downloaded model.
   `~/.ollmlx/logs/litellm.log`
   (`.log.1` holds the previous run's tail — the crash before this one);
   `local-llm stop` cleans up leftover processes.
-- **Interrupted download** — huggingface_hub 1.x does not resume partial files
-  across runs. local-llm detects an incomplete model before starting the stack
-  (finished blobs are reused, stale `.incomplete` leftovers pruned, the rest
-  re-downloaded), so a half-downloaded model never silently "serves".
+- **Interrupted download** — weight files (any LFS file ≥1GiB: safetensors
+  shards, GGUF quants) are fetched with plain Range requests and resume
+  from the bytes already on disk across runs; a killed hub download's
+  partial is adopted after a content check, and each finished file is
+  sha256-verified before it's linked into the cache. Small files go
+  through huggingface_hub, which does not resume across runs — stale
+  leftovers are pruned, finished blobs reused, the rest re-downloaded —
+  so a half-downloaded model never silently "serves".
 - **Wrong model picked by the fit score** — press `s` to sort by downloads, or
   `/` to search, or just pass the full `org/repo` on the command line.
 
