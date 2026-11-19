@@ -277,9 +277,9 @@ def run_stack(cfg: Config, model: str, launch_monitor: bool = True,
                  "gguf_path": str(gguf_path) if gguf_path else None}
         max_input = hf.safe_context(cfg.hf_hub, model, cfg.prompt_cache_bytes,
                                     cfg.max_ctx)
-        if max_input < hf.model_ctx(cfg.hf_hub, model):
         if meta is not None:
             meta["max_input"] = max_input
+        if max_input < hf.model_ctx(cfg.hf_hub, model):
             ui.info(f"model context capped at {max_input} tokens"
                     " (prompt-cache budget) — oversized requests are refused,"
                     " clients compact before it OOMs")
@@ -312,7 +312,7 @@ def run_stack(cfg: Config, model: str, launch_monitor: bool = True,
         home = str(Path.home())
         monitor.run(model, cfg.mlx_port, cfg.litellm_port,
                     str(cfg.claude_cfg).replace(home, "~"),
-                    cfg.mlx_small_port if small_ok else 0, backend)
+                    cfg.mlx_small_port if small_ok else 0, backend,
                     "omp --model ollmlx/local", max_input)
     finally:
         if launch_monitor:
@@ -417,7 +417,7 @@ def run_stack_dialog(cfg: Config, model: str) -> int:
         home = str(Path.home())
         monitor.run(model, cfg.mlx_port, cfg.litellm_port,
                     str(cfg.claude_cfg).replace(home, "~"),
-                    result.get("handoff", 0), meta.get("backend", "mlx"))
+                    result.get("handoff", 0), meta.get("backend", "mlx"),
                     "omp --model ollmlx/local", meta.get("max_input", 0))
     finally:
         servers.stop_watchdog()
