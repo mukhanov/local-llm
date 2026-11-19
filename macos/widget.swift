@@ -19,9 +19,12 @@ import SwiftUI
 @main
 @MainActor
 struct MLXStackApp {
+    private static var retainedDelegate: AppDelegate?
+
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
+        retainedDelegate = delegate   // NSApplication.delegate is non-retaining
         app.delegate = delegate
         app.setActivationPolicy(.accessory)   // no Dock icon, no menu bar
         app.appearance = NSAppearance(named: .darkAqua)
