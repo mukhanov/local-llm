@@ -10,6 +10,7 @@ class Config:
     hf_hub: Path
     mlx_port: int
     litellm_port: int
+    widget_port: int
     api_key: str
     # Second, tiny model for cheap fast calls (Claude Code's background
     # title generator and other haiku-slot calls, which use a short fixed
@@ -76,6 +77,7 @@ class Config:
             ).expanduser(),
             mlx_port=int(os.environ.get("MLX_PORT", "19797")),
             litellm_port=int(os.environ.get("LITELLM_PORT", "4000")),
+            widget_port=int(os.environ.get("WIDGET_PORT", "19798")),
             api_key="sk-local-llm",
             small_model=os.environ.get(
                 "OLLMLX_SMALL_MODEL", "mlx-community/Qwen3-0.6B-4bit"),

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import psutil
 
-from . import applog, clients, hf, llmfit, models, monitor, picker, servers, startup, ui
+from . import applog, clients, hf, llmfit, models, monitor, picker, servers, startup, ui, widget
 from .applog import log
 from .config import Config
 
@@ -39,6 +39,7 @@ Usage (symlink: ~/bin/local-llm):
                            # (Q4_K_M, iq4_xs, …; default: best for free RAM)
   local-llm list           # show downloaded models (with sizes)
   local-llm serve <org/model> [quant]  # headless: no TUI, block until SIGTERM
+  local-llm widget           # native desktop monitor, updates every second
   local-llm rm [org/repo…] # delete downloaded models from disk (no args — menu)
   local-llm token [hf_…]   # HF token: show / save / --clear (or env HF_TOKEN)
 
@@ -90,6 +91,10 @@ def _dispatch(argv: list[str], interactive: bool) -> int:
         return cmd_rm(cfg, rest)
     if cmd in ("list", "ls"):
         return cmd_list(cfg)
+    if cmd == "widget":
+        if rest:
+            raise SystemExit("   usage: local-llm widget")
+        return widget.run(cfg)
     if cmd == "serve":
         if not rest or "/" not in rest[0]:
             raise SystemExit("   usage: local-llm serve <org/model> [quant]")
@@ -273,6 +278,8 @@ def run_stack(cfg: Config, model: str, launch_monitor: bool = True,
         max_input = hf.safe_context(cfg.hf_hub, model, cfg.prompt_cache_bytes,
                                     cfg.max_ctx)
         if max_input < hf.model_ctx(cfg.hf_hub, model):
+        if meta is not None:
+            meta["max_input"] = max_input
             ui.info(f"model context capped at {max_input} tokens"
                     " (prompt-cache budget) — oversized requests are refused,"
                     " clients compact before it OOMs")
@@ -306,6 +313,7 @@ def run_stack(cfg: Config, model: str, launch_monitor: bool = True,
         monitor.run(model, cfg.mlx_port, cfg.litellm_port,
                     str(cfg.claude_cfg).replace(home, "~"),
                     cfg.mlx_small_port if small_ok else 0, backend)
+                    "omp --model ollmlx/local", max_input)
     finally:
         if launch_monitor:
             servers.stop_watchdog()
@@ -410,6 +418,7 @@ def run_stack_dialog(cfg: Config, model: str) -> int:
         monitor.run(model, cfg.mlx_port, cfg.litellm_port,
                     str(cfg.claude_cfg).replace(home, "~"),
                     result.get("handoff", 0), meta.get("backend", "mlx"))
+                    "omp --model ollmlx/local", meta.get("max_input", 0))
     finally:
         servers.stop_watchdog()
         servers.stop_children()

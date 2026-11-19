@@ -65,10 +65,13 @@ class _UiSink:
 
 
 def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str,
-        small_port: int = 0, backend: str = "mlx") -> None:
+        small_port: int = 0, backend: str = "mlx",
+        omp_cmd: str = "omp --model ollmlx/local",
+        max_input: int = 0) -> None:
     """Blocks until exit (q / Ctrl-C). small_port=0 — no helper model.
     backend "llama" — the model port is llama-server (GGUF): its log and
-    perf lines replace the mlx ones."""
+    perf lines replace the mlx ones. max_input is the advertised token
+    ceiling used by the context graph."""
     global LOGS
     model_log = (("llama", LLAMA_LOG) if backend == "llama"
                  else ("mlx", MLX_LOG))
@@ -89,7 +92,8 @@ def run(model: str, mlx_port: int, lite_port: int, claude_cfg: str,
     _alt_scroll(True)
     try:
         curses.wrapper(lambda scr: _main(
-            scr, model, mlx_port, lite_port, claude_cfg, small_port, backend))
+            scr, model, mlx_port, lite_port, claude_cfg, small_port, backend,
+            omp_cmd, max_input))
     except KeyboardInterrupt:
         pass
     finally:
@@ -321,6 +325,12 @@ def tail_lines(path: str, k: int = 2, window: int = 262144):
 _TOKPS_LIVE = re.compile(r"^TOKPS live #(\d+) ([\d.]+)")
 _TOKPS_PRE = re.compile(r"^TOKPS prefill #(\d+) (\d+)")
 _TOKPS_DONE = re.compile(r"^TOKPS done (.+)")
+_TOKPS_CONTEXT = re.compile(r"^TOKPS context (\d+)")
+_TOKPS_ACTIVE = re.compile(r"^TOKPS active (\d+)")
+_DONE_CONTEXT = re.compile(
+    r"^(\d+) tok.*? prompt (\d+) tok, (\d+) cached"
+    r"(?: \(([\d.]+)s to first\))?")
+_PREFILL_CONTEXT = re.compile(r"Prompt processing progress: \d+/(\d+)")
 
 # llama-server has no TOKPS lines; its per-request perf summaries stand in
 # (format verified on build b11899). The prompt line is checked first —
@@ -332,21 +342,23 @@ _LLAMA_EVAL = re.compile(r"(?<!prompt )eval time =\s*[\d.]+ ms /\s*(\d+)"
 
 
 def _llama_perf(data: str):
-    """(eval_seq, eval_rate, pre_seq, pre_rate, summary) from llama-server
-    perf lines: each new line is one 'seq' tick at that rate, so the state
-    machine in draw_toks treats them exactly like TOKPS lines."""
+    """Perf state plus the latest request's prompt+output context."""
     n_eval = n_pre = 0
     rate = pre_rate = 0.0
     summary = ""
+    prompt = context = None
     for l in data.splitlines():
         if m := _LLAMA_PRE.search(l):
             n_pre += 1
             pre_rate = _safe_float(m[2])
+            prompt = context = int(m[1])
         elif m := _LLAMA_EVAL.search(l):
             n_eval += 1
             rate = _safe_float(m[2])
             summary = f"{m[1]} tokens at {rate:.1f} tok/s"
-    return n_eval, rate, n_pre, pre_rate, summary
+            if prompt is not None:
+                context = prompt + int(m[1])
+    return n_eval, rate, n_pre, pre_rate, summary, context, None
 
 
 def _safe_float(s: str) -> float:
@@ -357,20 +369,22 @@ def _safe_float(s: str) -> float:
 
 
 def tail_tokps(path: str):
-    """(live_seq, live_rate, pre_seq, pre_rate, summary) from the last TOKPS
-    lines of the log tail. The seq numbers advance ~1/s while the model
-    generates, so an unchanged seq means "not generating right now" — that's
-    how the monitor tells a live rate from a stale one. GGUF runs fall back
-    to llama-server perf lines (one tick per request, no live rate)."""
+    """Perf state plus the latest request's prompt+output context.
+
+    The seq numbers advance ~1/s while the model generates, so an unchanged
+    seq means "not generating right now". Prefill progress exposes the prompt
+    size before completion; the done line adds generated tokens. GGUF runs
+    fall back to llama-server perf lines (one tick per request)."""
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
             f.seek(max(0, size - 16384))
             data = f.read().decode("utf-8", "replace")
     except OSError:
-        return -1, 0.0, -1, 0.0, ""
+        return -1, 0.0, -1, 0.0, "", None, None
     live, pre = (-1, 0.0), (-1, 0.0)
     summary = ""
+    context = active = None
     for l in data.splitlines():
         if m := _TOKPS_LIVE.match(l):
             live = (int(m[1]), float(m[2]))
@@ -378,16 +392,26 @@ def tail_tokps(path: str):
             pre = (int(m[1]), int(m[2]))
         elif m := _TOKPS_DONE.match(l):
             summary = m[1]
-    if live[0] < 0 and pre[0] < 0:
+            if done := _DONE_CONTEXT.match(summary):
+                context = int(done[1]) + int(done[2])
+        elif m := _TOKPS_CONTEXT.match(l):
+            context = int(m[1])
+        elif m := _TOKPS_ACTIVE.match(l):
+            active = int(m[1])
+        elif m := _PREFILL_CONTEXT.search(l):
+            context = int(m[1])
+    if (live[0] < 0 and pre[0] < 0 and not summary
+            and context is None and active is None):
         return _llama_perf(data)
-    return live[0], live[1], pre[0], pre[1], summary
+    return live[0], live[1], pre[0], pre[1], summary, context, active
 
 
 def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port,
-          backend="mlx") -> None:
+          backend="mlx", omp_cmd="omp --model ollmlx/local",
+          max_input=0) -> None:
     client_cmds = (
         ("pi", "pi --model ollmlx/local"),
-        ("omp", "omp --model ollmlx/local"),
+        ("omp", omp_cmd),
         ("opencode", "opencode --model ollmlx/local"),
         ("claude", f"claude --settings {claude_cfg}"),
     )
@@ -395,6 +419,8 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port,
     cpu_hist = collections.deque(maxlen=240)
     tok_hist = collections.deque(maxlen=240)      # the big model
     tok_hist_s = collections.deque(maxlen=240)    # the helper
+    ctx_hist = collections.deque(maxlen=240)
+    ctx_cur = 0
     tok = {"live_seq": -1, "pre_seq": -1, "idle": 1 << 30,
            "cur": 0.0, "txt": "idle", "summary": "", "peak": 0.0}
     tok_s = dict(tok)
@@ -479,17 +505,16 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port,
         lw = rx - 1
         rw = w - rx - 1
 
-        # --- tok/s graphs: the big model and the helper side by side (a
-        # single full-width graph when no helper runs). Each keeps its own
-        # state, history and scale — 30 tok/s and 300 tok/s would flatten
-        # each other on a shared axis. ---
+        # --- tok/s graphs for the big model and optional helper, plus the
+        # main model's context usage. Each tok/s graph keeps its own scale —
+        # 30 tok/s and 300 tok/s would flatten each other on a shared axis. ---
         graphs = [(tok, tok_hist, "TOK/S main", LOGS[0][1])]
         if small_port:
             graphs.append((tok_s, tok_hist_s, "TOK/S small", MLX_SMALL_LOG))
         gh = min(4, max(0, (h - y[0]) - 28))
 
         def draw_toks(x0, width, st, hist, label, path):
-            ls, lr, ps, pr, summary = tail_tokps(path)
+            ls, lr, ps, pr, summary, context, active = tail_tokps(path)
             live_new, pre_new = ls != st["live_seq"], ps != st["pre_seq"]
             if live_new:
                 st.update(idle=0, cur=lr, txt=f"{lr:5.1f} tok/s")
@@ -523,8 +548,9 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port,
                 # avg over active samples only — the zeros in the hist mark
                 # idle/prefill, not real speed; max is the run-wide peak
                 # (survives the rolling window; the scale stays window-based)
-                active = [v for v in hist if v > 0]
-                avg = f"{sum(active) / len(active):.0f}" if active else "–"
+                active_rates = [v for v in hist if v > 0]
+                avg = (f"{sum(active_rates) / len(active_rates):.0f}"
+                       if active_rates else "–")
                 stats = (f"· avg {avg} · max {st['peak']:.0f} "
                          if st["peak"] > 0 else "")
                 base = f" tok/s 0–{scale:.0f} "
@@ -551,15 +577,76 @@ def _main(stdscr, model, mlx_port, lite_port, claude_cfg, small_port,
                    else "no completions yet — tok/s appears during generation")
             add(y[0], x0 + 2, txt[: max(1, width - 4)], curses.A_DIM)
             y[0] += 1
+            return context, active
 
-        # both graphs share the same rows and line up with the column
-        # grid below (left half / right half): draw each from the same
-        # top line, then land below — they're always equal-height
-        gcols = [(0, lw), (rx, rw)] if small_port else [(0, w - 1)]
+        def draw_context(x0, width, latest, active, summary):
+            """Latest request's prompt+output tokens against the hard cap."""
+            nonlocal ctx_cur
+            if latest is not None:
+                ctx_cur = latest
+            ctx_hist.append(ctx_cur)
+            total_ctx = max_input or max(ctx_cur, 1)
+
+            def tokens(n):
+                if n >= 10000:
+                    return f"{n / 1000:.1f}K"
+                if n >= 1000:
+                    return f"{n / 1000:.0f}K"
+                return str(n)
+
+            current, limit = tokens(ctx_cur), tokens(total_ctx)
+            pre = " CONTEXT ["
+            suffix = f"] {current}/{limit}"
+            bw = max(4, width - len(pre) - len(suffix))
+            frac = ctx_cur / total_ctx
+            put_bar(y[0], x0, pre, bw, frac, suffix, B)
+            y[0] += 1
+            if gh:
+                box_title = " context history "
+                add(y[0], x0, "┌" + box_title + "─" * max(
+                    0, width - 2 - len(box_title)) + "┐", curses.A_DIM)
+                y[0] += 1
+                data = list(ctx_hist)[-(width - 4):]
+                off = (width - 4) - len(data)
+                for i, v in enumerate(data):
+                    ch = int(gh * v / total_ctx + 0.5)
+                    for r in range(gh - ch, gh):
+                        add(y[0] + r, x0 + 2 + off + i, "█",
+                            curses.color_pair(heat(100 * v / total_ctx)))
+                for r in range(gh):
+                    add(y[0] + r, x0, "│", curses.A_DIM)
+                    add(y[0] + r, x0 + width - 1, "│", curses.A_DIM)
+                y[0] += gh
+                add(y[0], x0, "└" + "─" * (width - 2) + "┘", curses.A_DIM)
+                y[0] += 1
+            done = _DONE_CONTEXT.match(summary)
+            ttft = f"{float(done[4]):.1f}s" if done and done[4] else "–"
+            missed = tokens(int(done[2]) - int(done[3])) if done else "–"
+            active_txt = str(active) if active is not None else "–"
+            stats = (f"TTFT {ttft} · uncached {missed} · active {active_txt}"
+                     if width >= 42 else
+                     f"{ttft} TTFT · {missed} miss · {active_txt} active")
+            add(y[0], x0 + 2, stats[: max(1, width - 2)], curses.A_DIM)
+            y[0] += 1
+
+        # All top graphs share rows; equal-width columns include the main
+        # model, optional helper and context history.
+        ncols = len(graphs) + 1
+        edges = [(w - 1) * i // ncols for i in range(ncols + 1)]
+        gcols = []
+        for i in range(ncols):
+            left = edges[i] + (1 if i else 0)
+            gcols.append((left, edges[i + 1] - left))
         y_top = y[0]
-        for (st, hist, label, path), (gx0, gwd) in zip(graphs, gcols):
+        latest_context = active = None
+        for i, ((st, hist, label, path), (gx0, gwd)) in enumerate(
+                zip(graphs, gcols)):
             y[0] = y_top
-            draw_toks(gx0, gwd, st, hist, label, path)
+            found = draw_toks(gx0, gwd, st, hist, label, path)
+            if i == 0:
+                latest_context, active = found
+        y[0] = y_top
+        draw_context(*gcols[-1], latest_context, active, tok["summary"])
         y[0] = y_top + (gh + 4 if gh else 2)
         put()
 

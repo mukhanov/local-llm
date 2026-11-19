@@ -84,6 +84,8 @@ everything — no daemons left behind.
   OOM that used to kill the generation thread can't happen.
 - **System monitor** — htop-style curses UI: the model's live tokens/sec
   (decode rate + a history graph, prefill rate while it reads your prompt),
+  latest-request context usage and its token limit (current/total + history),
+  last-request TTFT and uncached prompt tokens, live concurrent generations,
   per-core CPU + history graph, RAM/swap, server status, process RSS,
   recent errors from the logs.
 - **llmfit stats & score** — context length, tool-use capability and a RAM
@@ -126,7 +128,8 @@ everything — no daemons left behind.
 
 That's the only manual prerequisite — Python itself and all dependencies are
 installed automatically (see below). Run it and pick a model — no
-configuration decisions needed.
+configuration decisions needed. The optional native desktop panel also needs
+Swift Command Line Tools (`xcode-select --install`), not full Xcode.
 
 ## Install
 
@@ -190,6 +193,7 @@ $ local-llm ggml-org/Qwen3-0.6B-GGUF            # GGUF: llama.cpp backend
 $ local-llm ggml-org/Qwen3-0.6B-GGUF Q4_K_M     # GGUF: pick the quant file
 $ local-llm list                # downloaded models: disk size, RAM, MoE, ctx, score
 $ local-llm serve org/model     # headless stack: no TUI, stop with SIGTERM
+$ local-llm widget              # native desktop monitor, updates every second
 $ local-llm rm                  # delete downloaded models (menu)
 $ local-llm stop                # kill servers left over from a crashed run
 $ local-llm token hf_xxx        # save HF token (or export HF_TOKEN)
@@ -258,11 +262,12 @@ $ curl http://127.0.0.1:4000/v1/messages \
 
 ### Monitor
 
-Two **tokens/sec** graphs side by side — the big model and the helper,
-each with its own scale (30 vs 300 tok/s would flatten each other on a
-shared axis): current decode rate, history graph, the prompt-processing
-rate while it prefill-reads your prompt, and a one-line summary of the
-last completion. Below them, in a grid: CPU with a history graph on the
+Two **tokens/sec** graphs — the big model and the helper — sit next to
+**context usage** (current/total, history, last-request TTFT and uncached
+prompt tokens, active generations). Each tok/s graph has its own scale
+(30 vs 300 tok/s would flatten each other on a shared axis): current
+decode rate, history graph, the prompt-processing rate while it
+prefill-reads your prompt, and a one-line summary of the last completion. Below them, in a grid: CPU with a history graph on the
 left and the per-core grid on the right, then the client launch commands
 on the left and mlx/litellm process stats on the right (each with its
 share of RAM, plus a ledger line: the stack's total vs the rest of the
@@ -294,6 +299,21 @@ RAM%), the memory pressure being what kills the model), model name and
 the models' live RAM (`🟢 <model> · 65G`). Quitting hands the original
 title back.
 
+`local-llm widget` opens the same monitor as a native SwiftUI desktop panel,
+with one-second updates. Click the terminal status-bar icon for a menu with
+**Open/Hide monitor**, downloaded models to load/switch, and **Exit**. Models started from the tray stay its foreground
+children and stop when the tray app exits; an independently launched terminal
+stack is never taken over. Hiding the panel keeps the snapshot API and metric
+history alive.
+It joins all Spaces and can be moved/resized. `Cmd+Q` and **Exit** quit the
+tray app, stopping only a stack that the tray itself launched. The first launch builds
+**~/Applications/MLX Stack.app** with Swift Command Line Tools; later launches
+rebuild only when the source changes. The app can also be opened directly from
+Finder, without a terminal: it starts its own Python snapshot API child.
+While the app is running, the localhost-only snapshot API listens on `:19798`;
+it stops on **Exit**. This is a desktop panel, not a WidgetKit extension, so
+macOS does not throttle its updates to a timeline.
+
 ## Configuration
 
 All via environment variables:
@@ -302,6 +322,7 @@ All via environment variables:
 |--------------------------|--------------------------------|---------|
 | `MLX_PORT`               | `19797`                        | mlx_lm.server port (OpenAI API) |
 | `LITELLM_PORT`           | `4000`                         | litellm proxy port (OpenAI + Anthropic) |
+| `WIDGET_PORT`            | `19798`                        | localhost snapshot API for the native desktop panel |
 | `OLLMLX_SMALL_MODEL`     | `mlx-community/Qwen3-0.6B-4bit` | tiny helper model for fast/background calls; marked 🔒 in lists and protected from deletion |
 | `MLX_SMALL_PORT`         | `8081`                         | helper model port (`ollmlx/small`) |
 | `MLX_KV_BITS`            | `0`                            | KV quantization; breaks prompt-cache hits on long contexts — only for ~100G models. GGUF: `8` maps to llama-server's q8_0 KV cache |
@@ -415,7 +436,8 @@ local_llm/
   ui.py              colored output, locale/term fixes, hardware info
   picker.py          curses model picker (TUI + plain fallback)
   startup.py         fullscreen boot dialog (spinner + live boot log)
-  monitor.py         htop-style curses monitor (tok/s, CPU, RAM, log tails)
+  monitor.py         htop-style curses monitor (tok/s, context, CPU, RAM, logs)
+  widget.py          native panel launcher + localhost snapshot API
   servers.py         mlx/litellm lifecycle: spawn, readiness, warmup, watchdog
   mlxwrap.py         mlx_lm.server entry wrapper: tok/s lines + context guard
   clients.py         pi / omp / Claude Code config writer
@@ -424,6 +446,9 @@ local_llm/
   llmfit.py          llmfit catalog cache + composite score port
   vendor/            model impls ahead of mlx_lm releases (registered only
                      when the installed mlx_lm lacks the module)
+macos/
+  widget.swift       native SwiftUI desktop panel (built on demand)
+  Info.plist         MLX Stack.app bundle manifest
 ```
 
 Module names are part of the process contract: children are spawned as

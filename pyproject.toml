@@ -31,3 +31,6 @@ path = "local_llm/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["local_llm"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"macos" = "local_llm/macos"

@@ -862,6 +862,25 @@ def model_kv_per_token(hf_hub: Path, repo: str) -> float | None:
     hd = _dig(c, "head_dim")
     if hd is None and heads and _dig(c, "hidden_size"):
         hd = _dig(c, "hidden_size") / heads
+
+    # Hybrid models (Qwen3.5/3.8) keep a token-growing KV cache only on
+    # full-attention layers. Counting their linear-attention layers too
+    # shrinks the advertised context 4x (seen 2026-11-18: 59k instead of
+    # the 110k hard cap on Qwen3.8-27B).
+    def full_attention_layers(d):
+        types = d.get("layer_types")
+        if isinstance(types, list):
+            return sum(t == "full_attention" for t in types)
+        for v in d.values():
+            if isinstance(v, dict):
+                n = full_attention_layers(v)
+                if n is not None:
+                    return n
+        return None
+
+    attention_layers = full_attention_layers(c)
+    if attention_layers is not None:
+        layers = attention_layers
     if not all(isinstance(x, (int, float)) and x for x in (layers, kvh, hd)):
         return None
     return 2 * kvh * hd * layers * 2

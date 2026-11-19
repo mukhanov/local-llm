@@ -21,6 +21,7 @@ local_llm/
   picker.py          curses model picker (plain-text fallback when not a tty)
   startup.py         fullscreen boot dialog; QueueWriter feeds it worker output
   monitor.py         curses monitor; owns the terminal until q
+  widget.py          native panel launcher + localhost snapshot API
   servers.py         spawn/readiness/warmup/stop of children + watchdog thread
   clients.py         writes ~/.pi / ~/.omp / opencode / claude client configs
   mlxwrap.py         `python -m local_llm.mlxwrap` = mlx_lm.server + TOKPS hook
@@ -29,6 +30,9 @@ local_llm/
   llmfit.py          llmfit catalog cache + composite-score port (Apache-2.0)
   vendor/            model impls ahead of mlx_lm releases, registered only
                      when the installed mlx_lm lacks the module
+macos/
+  widget.swift       SwiftUI desktop panel, built on demand by `local-llm widget`
+  Info.plist         Ollmlx.app bundle manifest
 ```
 
 ## Invariants — breaking these breaks running setups

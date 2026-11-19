@@ -12,6 +12,8 @@ Line formats (kept short and stable — the monitor parses them):
                                across concurrent requests; #seq lets the
                                monitor tell "still generating" from "stale")
   TOKPS prefill #3 4127        prompt-processing rate, uncached tokens
+  TOKPS context 8750           latest request's prompt+generated tokens, ~1/s
+  TOKPS active 2               currently generating requests, on start/finish
   TOKPS done 512 tok · decode 48.9 tok/s (10.5s) · prompt 8231 tok, 5179 cached
                                per-request summary when the stream ends
 """
@@ -55,15 +57,22 @@ _lock = threading.Lock()
 # window opened (shared by all in-flight requests — the generation thread
 # interleaves them, so a per-request rate would under-report)
 _live = {"tokens": 0, "t0": None, "seq": 0}
+_active = 0
 
 
 def _emit(text: str) -> None:
     print(f"TOKPS {text}", flush=True)   # stdout -> the mlx-server.log servers.py opened
 
 
-def _tok_bump() -> None:
+def _active_bump(delta: int) -> None:
+    global _active
+    with _lock:
+        _active += delta
+        _emit(f"active {_active}")
+
+
+def _tok_bump(now: float) -> None:
     """One more token: open the live window, or emit + reset when it's full."""
-    now = time.monotonic()
     with _lock:
         st = _live
         if st["t0"] is None:
@@ -102,16 +111,22 @@ def _counting(ctx, inner):
     n = 0
     t0 = time.monotonic()
     t_first = None
+    prompt = getattr(ctx, "prompt", ()) or ()
+    context_t = t0
+    _active_bump(1)
     try:
         for resp in inner:
             if t_first is None:
                 t_first = time.monotonic()
             n += 1
-            _tok_bump()
+            now = time.monotonic()
+            _tok_bump(now)
+            if prompt and now - context_t >= EMIT_EVERY:
+                _emit(f"context {len(prompt) + n}")
+                context_t = now
             yield resp
     finally:
         t_end = time.monotonic()
-        prompt = getattr(ctx, "prompt", ()) or ()
         cached = max(0, getattr(ctx, "prompt_cache_count", 0) or 0)
         parts = [f"done {n} tok"]
         if n and t_first:
@@ -122,6 +137,7 @@ def _counting(ctx, inner):
             parts.append(f"prompt {len(prompt)} tok, {cached} cached"
                          f" ({ttft:.1f}s to first)")
         _emit(" · ".join(parts))
+        _active_bump(-1)
 
 
 def _msg_text(content) -> str:
