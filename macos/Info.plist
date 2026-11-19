@@ -6,6 +6,10 @@
     <string>en</string>
     <key>CFBundleDisplayName</key>
     <string>MLX Stack</string>
+    <key>CFBundleIconFile</key>
+    <string>MLX Stack</string>
+    <key>CFBundleIconName</key>
+    <string>MLX Stack</string>
     <key>CFBundleExecutable</key>
     <string>MLXStack</string>
     <key>CFBundleIdentifier</key>

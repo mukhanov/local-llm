@@ -21,4 +21,4 @@ Module names are load-bearing: servers are spawned and pkill-matched by
 module path (see AGENTS.md) — don't rename them casually.
 """
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"

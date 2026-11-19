@@ -263,6 +263,18 @@ def run_api(cfg) -> int:
     applog.setup()
     controller = StackController(cfg)
     server = _make_server(cfg, controller)
+    parent = os.getppid()
+
+    def watch_parent():
+        # A killed/crashed app cannot run applicationWillTerminate. Once
+        # launchd adopts us, keeping the API alive would leave a headless
+        # model and a mystery Python process with no tray icon.
+        while os.getppid() == parent:
+            time.sleep(1)
+        server.shutdown()
+
+    threading.Thread(target=watch_parent, name="app-parent-watchdog",
+                     daemon=True).start()
     try:
         server.serve_forever(poll_interval=0.2)
         return 0
@@ -279,14 +291,17 @@ def _build(cfg) -> Path:
     source_dir = packaged if (packaged / "widget.swift").is_file() else root
     source = source_dir / "widget.swift"
     template = source_dir / "Info.plist"
+    icon = source_dir / "MLX Stack.icns"
     app = Path.home() / "Applications" / "MLX Stack.app"
     binary = app / "Contents" / "MacOS" / "MLXStack"
     plist = app / "Contents" / "Info.plist"
-    if not source.is_file() or not template.is_file():
+    app_icon = app / "Contents" / "Resources" / "MLX Stack.icns"
+    if not source.is_file() or not template.is_file() or not icon.is_file():
         raise SystemExit(f"   widget sources are missing: {source_dir}")
-    newest = max(source.stat().st_mtime, template.stat().st_mtime)
+    newest = max(source.stat().st_mtime, template.stat().st_mtime,
+                 icon.stat().st_mtime)
     if (binary.exists() and binary.stat().st_mtime >= newest
-            and plist.exists()
+            and plist.exists() and app_icon.exists()
             and f"<string>{__version__}</string>" in plist.read_text()):
         return app
     if not shutil.which("swiftc"):
@@ -300,6 +315,8 @@ def _build(cfg) -> Path:
                         "-framework", "AppKit"], check=True)
         os.replace(tmp, binary)
         plist.write_text(template.read_text().replace("__VERSION__", __version__))
+        app_icon.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(icon, app_icon)
         if shutil.which("codesign"):
             subprocess.run(["codesign", "--force", "--deep", "--sign", "-",
                             str(app)], check=True)
